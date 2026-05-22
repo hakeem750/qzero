@@ -68,7 +68,7 @@ class TrainLoop:
             return max(0.05, 0.5 * (1 + math.cos(math.pi * progress)))
 
         self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
-        self.scaler    = torch.cuda.amp.GradScaler(enabled=(self.dtype == torch.float16))
+        self.scaler    = torch.amp.GradScaler('cuda', enabled=(self.dtype == torch.float16))
 
         self.step = 0
         self.metrics_history: List[Dict] = []

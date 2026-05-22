@@ -133,7 +133,7 @@ def main():
     loop.step = start_step
 
     # Evaluation arena
-    arena = Arena(num_games=20, num_sims=100, win_threshold=0.55, device=str(device))
+    arena = Arena(num_games=20, num_sims=100, win_thresh=0.55, device=str(device))
 
     # Start self-play workers
     stop_event = threading.Event()
