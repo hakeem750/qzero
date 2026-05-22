@@ -87,6 +87,23 @@ def selfplay_worker(
             print(f"[selfplay worker error] {e}")
 
 
+def print_training_status(metrics: dict, buffer: ReplayBuffer, elapsed: float) -> None:
+    print(
+        f"[step {int(metrics.get('step', 0)):>7}] "
+        f"buf={buffer.size:>6}  "
+        f"loss={metrics.get('loss', 0):.4f}  "
+        f"p={metrics.get('policy_loss', 0):.4f}  "
+        f"v={metrics.get('value_loss', 0):.4f}  "
+        f"net_H={metrics.get('entropy', 0):.3f}  "
+        f"target_H={metrics.get('target_entropy', 0):.3f}  "
+        f"top_p={metrics.get('target_top_prob', 0):.3f}  "
+        f"z={metrics.get('target_value_mean', 0):+.3f}"
+        f"+/-{metrics.get('target_value_std', 0):.3f}  "
+        f"lr={metrics.get('lr', 0):.2e}  "
+        f"t={elapsed:.1f}s"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -99,6 +116,7 @@ def main():
     parser.add_argument("--train_steps", type=int, default=100_000)
     parser.add_argument("--eval_every",  type=int, default=2_000)
     parser.add_argument("--ckpt_every",  type=int, default=1_000)
+    parser.add_argument("--log_every",   type=int, default=100)
     parser.add_argument("--resume",      action="store_true")
     args = parser.parse_args()
 
@@ -128,7 +146,7 @@ def main():
     buffer = ReplayBuffer(capacity=500_000)
 
     # Training
-    cfg = TrainConfig(device=str(device))
+    cfg = TrainConfig(device=str(device), log_every=args.log_every)
     loop = TrainLoop(model, buffer, cfg)
     loop.step = start_step
 
@@ -153,8 +171,15 @@ def main():
         print(f"  Buffer: {buffer.size} / 2000")
 
     print("Training started.")
+    train_t0 = time.time()
     for i in range(args.train_steps):
         metrics = loop.train_step()
+        if metrics.get("skipped"):
+            print(f"[step {loop.step:>7}] skipped non-finite loss")
+            continue
+
+        if (loop.step % args.log_every) == 0:
+            print_training_status(metrics, buffer, time.time() - train_t0)
 
         if (loop.step % args.ckpt_every) == 0:
             save_checkpoint(model, loop.step)

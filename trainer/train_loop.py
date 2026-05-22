@@ -117,12 +117,19 @@ class TrainLoop:
         with torch.no_grad():
             probs   = torch.softmax(logits, dim=-1).clamp(min=1e-8)
             entropy = (-probs * probs.log()).sum(dim=-1).mean().item()
+            target_policy = policy.clamp(min=1e-8)
+            target_entropy = (-target_policy * target_policy.log()).sum(dim=-1).mean().item()
+            target_top_prob = policy.max(dim=-1).values.mean().item()
 
         metrics = {
             "loss":         loss.item(),
             "policy_loss":  policy_loss.item(),
             "value_loss":   value_loss.item(),
             "entropy":      entropy,
+            "target_entropy": target_entropy,
+            "target_top_prob": target_top_prob,
+            "target_value_mean": value.mean().item(),
+            "target_value_std": value.std(unbiased=False).item(),
             "lr":           self.scheduler.get_last_lr()[0],
             "step":         self.step,
         }
