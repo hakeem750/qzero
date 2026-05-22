@@ -1,0 +1,65 @@
+project: quoridor_alpha_zero
+
+# ── Environment ────────────────────────────────────────────
+env:
+  board_size:  9
+  max_walls:  10
+  max_moves:  500      # draw condition (IMPROVEMENT: prevents infinite games)
+
+# ── Network ────────────────────────────────────────────────
+network:
+  in_channels:  17
+  channels:     256
+  num_blocks:   20
+  se_reduction:  4     # IMPROVEMENT: Squeeze-and-Excitation reduction ratio
+  num_actions:  140
+  compile:      true   # torch.compile()
+
+# ── MCTS ───────────────────────────────────────────────────
+mcts:
+  num_simulations: 800
+  c_puct:          1.5
+  dirichlet_alpha: 0.3
+  noise_frac:      0.25
+  virtual_loss:    3   # IMPROVEMENT: virtual loss for parallel leaf batching
+  temperature_threshold: 20   # moves before greedy switch
+  temp_high: 1.0
+  temp_low:  0.1
+
+# ── Training ───────────────────────────────────────────────
+training:
+  batch_size:       1024
+  learning_rate:    3e-4
+  weight_decay:     1e-4
+  l2_reg:           1e-4
+  grad_clip:        1.0
+  warmup_steps:     1000      # IMPROVEMENT: LR warmup
+  cosine_steps:     100000
+  dtype:            bfloat16  # IMPROVEMENT: BF16 > FP16
+  device:           cuda
+  checkpoint_every: 1000
+  log_every:        100
+
+# ── Replay buffer ──────────────────────────────────────────
+replay:
+  capacity:     500000
+  min_size:     10000
+
+# ── Self-play ──────────────────────────────────────────────
+selfplay:
+  num_workers:    4
+  games_per_iter: 100
+  augment:        true   # IMPROVEMENT: LR symmetry augmentation
+
+# ── Evaluation ─────────────────────────────────────────────
+evaluation:
+  num_games:       100
+  num_sims:        400
+  win_threshold:   0.55
+  eval_every:      50    # evaluate every N training checkpoints
+
+# ── Logging ────────────────────────────────────────────────
+logging:
+  use_wandb:    false
+  use_tensorboard: true
+  log_dir:      runs/
