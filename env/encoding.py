@@ -98,10 +98,7 @@ def _mirror_lr_walls(wall_action_start: int, anchors: list[tuple[int,int]]) -> l
     actions = []
     for r, c in anchors:
         mc = WALL_GRID - 1 - c
-        # clamp to valid range (wall spans c and c+1, so mirror c → WG-1-c-1 = WG-2-c)
-        mc = WALL_GRID - 2 - c
-        if 0 <= mc < WALL_GRID:
-            actions.append(wall_action_start + r * WALL_GRID + mc)
+        actions.append(wall_action_start + r * WALL_GRID + mc)
     return actions
 
 
@@ -125,18 +122,16 @@ def mirror_state_and_policy(
     for a, ma in pawn_mirror.items():
         m_policy[ma] = policy[a]
 
-    # Horizontal walls: mirror column c → 6-c (wall spans c,c+1 → 6-c,7-c = 6-c,6-c+1)
+    # Horizontal walls: mirror column c -> 7-c.
     for idx in range(64):
         r, c = divmod(idx, WALL_GRID)
-        mc = WALL_GRID - 2 - c
-        if 0 <= mc < WALL_GRID:
-            m_policy[H_WALL_OFFSET + r * WALL_GRID + mc] = policy[H_WALL_OFFSET + idx]
+        mc = WALL_GRID - 1 - c
+        m_policy[H_WALL_OFFSET + r * WALL_GRID + mc] = policy[H_WALL_OFFSET + idx]
 
-    # Vertical walls: mirror column c → 6-c
+    # Vertical walls: mirror column c -> 7-c.
     for idx in range(64):
         r, c = divmod(idx, WALL_GRID)
-        mc = WALL_GRID - 2 - c
-        if 0 <= mc < WALL_GRID:
-            m_policy[V_WALL_OFFSET + r * WALL_GRID + mc] = policy[V_WALL_OFFSET + idx]
+        mc = WALL_GRID - 1 - c
+        m_policy[V_WALL_OFFSET + r * WALL_GRID + mc] = policy[V_WALL_OFFSET + idx]
 
     return m_obs, m_policy

@@ -125,6 +125,22 @@ class PolicyValueNet(nn.Module):
         # Mask illegal actions with large negative value
         logits = logits.masked_fill(~legal_mask, float("-inf"))
         policy = torch.softmax(logits, dim=-1)
+        
+        # Handle NaN from softmax of all -inf (shouldn't happen in valid games)
+        # Replace with uniform distribution over legal actions
+        nan_mask = torch.isnan(policy)
+        if nan_mask.any():
+            batch_size = policy.shape[0]
+            for b in range(batch_size):
+                if nan_mask[b].any():
+                    num_legal = legal_mask[b].sum().float()
+                    if num_legal > 0:
+                        policy[b] = 0.0
+                        policy[b, legal_mask[b]] = 1.0 / num_legal
+                    else:
+                        # Fallback: uniform over all actions (should never happen)
+                        policy[b] = 1.0 / policy.shape[1]
+        
         return policy, value
 
 

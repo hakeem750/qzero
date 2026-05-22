@@ -40,6 +40,25 @@ def _temperature(move_number: int) -> float:
     return 1.0 if move_number < 20 else 0.1
 
 
+def _safe_sample_policy(policy: np.ndarray, state: QuoridorState) -> np.ndarray:
+    policy = np.asarray(policy, dtype=np.float64)
+    policy = np.where(np.isfinite(policy) & (policy > 0), policy, 0.0)
+
+    total = policy.sum(dtype=np.float64)
+    if total <= 0.0:
+        policy = np.zeros(NUM_ACTIONS, dtype=np.float64)
+        actions = legal_actions(state)
+        if actions:
+            policy[actions] = 1.0 / len(actions)
+        else:
+            policy[:] = 1.0 / NUM_ACTIONS
+    else:
+        policy = policy / total
+
+    policy[int(np.argmax(policy))] += 1.0 - policy.sum(dtype=np.float64)
+    return policy
+
+
 class GameGenerator:
     """
     Runs one complete self-play game using MCTS + neural network.
@@ -102,6 +121,7 @@ class GameGenerator:
             # Policy target from visit counts
             temp   = _temperature(move_number)
             policy = self.mcts.action_probs(root, temperature=temp)
+            policy = _safe_sample_policy(policy, env.state)
 
             # Record observation from current player's perspective
             obs = encode_state(env.state)

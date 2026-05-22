@@ -194,19 +194,36 @@ class MCTS:
         temperature=1.0 → proportional; temperature→0 → argmax.
         """
         from env.actions import NUM_ACTIONS
-        visits = np.zeros(NUM_ACTIONS, dtype=np.float32)
+        visits = np.zeros(NUM_ACTIONS, dtype=np.float64)
         for action, child in root.children.items():
             visits[action] = child.visit_count
 
         if temperature == 0 or temperature < 1e-6:
-            best = int(np.argmax(visits))
             probs = np.zeros(NUM_ACTIONS, dtype=np.float32)
+            if root.children:
+                best = max(root.children, key=lambda action: visits[action])
+            else:
+                best = int(np.argmax(visits))
             probs[best] = 1.0
             return probs
 
-        v = visits ** (1.0 / temperature)
-        s = v.sum()
-        return v / s if s > 0 else visits
+        actions = list(root.children.keys())
+        probs = np.zeros(NUM_ACTIONS, dtype=np.float64)
+        if actions:
+            action_visits = visits[actions]
+            positive = action_visits > 0
+            if positive.any():
+                scaled = np.full_like(action_visits, -np.inf, dtype=np.float64)
+                scaled[positive] = np.log(action_visits[positive]) / temperature
+                scaled -= np.max(scaled[positive])
+                weights = np.exp(scaled)
+                probs[actions] = weights
+            else:
+                probs[actions] = 1.0
+        else:
+            probs[:] = 1.0
+
+        return _normalize_probs(probs)
 
 
 # ---------------------------------------------------------------------------
@@ -226,3 +243,22 @@ def _terminal_value(winner_id: Optional[int], to_play: int) -> float:
     if winner_id == 0 or winner_id is None:
         return 0.0
     return 1.0 if winner_id == to_play else -1.0
+
+
+def _normalize_probs(probs: np.ndarray) -> np.ndarray:
+    """
+    Return a finite float64 probability vector whose sum is exactly 1.0.
+    np.random.choice is strict about this, so absorb roundoff into the
+    largest entry after normalization.
+    """
+    probs = np.asarray(probs, dtype=np.float64)
+    probs = np.where(np.isfinite(probs) & (probs > 0), probs, 0.0)
+    total = probs.sum(dtype=np.float64)
+    if total <= 0.0:
+        probs[:] = 1.0 / probs.size
+    else:
+        probs /= total
+
+    residual = 1.0 - probs.sum(dtype=np.float64)
+    probs[int(np.argmax(probs))] += residual
+    return probs
