@@ -55,13 +55,15 @@ class Node:
     def q_value(self) -> float:
         """Mean action value, including virtual loss penalty."""
         n = self.visit_count + self.virtual_loss
-        if n == 0:
+        if n <= 0:
             return 0.0
         return (self.value_sum - self.virtual_loss) / n
 
     def puct_score(self, parent_visit: int, c_puct: float) -> float:
         """Q + U (PUCT exploration bonus)."""
-        u = c_puct * self.prior * math.sqrt(parent_visit) / (1 + self.visit_count + self.virtual_loss)
+        parent_visit = max(0, parent_visit)
+        child_visit = max(0, self.visit_count + self.virtual_loss)
+        u = c_puct * self.prior * math.sqrt(parent_visit) / (1 + child_visit)
         return self.q_value + u
 
     # ------------------------------------------------------------------
@@ -71,7 +73,7 @@ class Node:
         self.virtual_loss += vl
 
     def revert_virtual_loss(self, vl: int = 1) -> None:
-        self.virtual_loss -= vl
+        self.virtual_loss = max(0, self.virtual_loss - vl)
 
     # ------------------------------------------------------------------
     def backup(self, value: float) -> None:

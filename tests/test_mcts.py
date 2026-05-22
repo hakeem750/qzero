@@ -1,5 +1,6 @@
 import numpy as np
 
+from env.state import initial_state
 from mcts.node import Node
 from mcts.search import MCTS
 
@@ -34,3 +35,23 @@ class TestMCTSActionProbs:
         assert probs[4] == 0.5
         assert probs[8] == 0.5
         assert np.count_nonzero(probs) == 2
+
+
+class TestMCTSVirtualLoss:
+    def test_sync_simulations_do_not_make_root_virtual_loss_negative(self):
+        mcts = MCTS(virtual_loss=3)
+        root = mcts.new_root(initial_state())
+
+        def inference_fn(obs_batch, mask_batch):
+            policy = mask_batch.astype(np.float64)
+            policy /= policy.sum(axis=1, keepdims=True)
+            value = np.zeros((obs_batch.shape[0], 1), dtype=np.float32)
+            return policy, value
+
+        mcts.run_simulations_sync(root, inference_fn, num_simulations=1)
+        for _ in range(5):
+            mcts.run_simulations_sync(root, inference_fn, num_simulations=10)
+            assert root.virtual_loss == 0
+
+        for child in root.children.values():
+            assert child.virtual_loss >= 0

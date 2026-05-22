@@ -73,6 +73,7 @@ class MCTS:
         """
         path = [root]
         node = root
+        node.add_virtual_loss(self.vl)
         while node.expanded and not is_terminal(node.state):
             best_action, best_child = self._best_child(node)
             best_child.add_virtual_loss(self.vl)   # IMPROVEMENT
