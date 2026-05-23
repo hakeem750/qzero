@@ -1,5 +1,5 @@
 """
-QuoridorEnv — OpenAI Gym-style environment wrapping the pure rules engine.
+QuoridorEnv - OpenAI Gym-style environment wrapping the pure rules engine.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import List, Optional
 from .state import QuoridorState, initial_state, BOARD_SIZE
 from .rules import legal_actions, apply_action, is_terminal, winner
 from .encoding import encode_state
-from .actions import action_name, NUM_ACTIONS
+from .actions import action_name
 
 
 class QuoridorEnv:
@@ -47,11 +47,9 @@ class QuoridorEnv:
 
         if not terminated:
             reward = 0.0
-        elif w == 0:                      # draw
+        elif w == 0:
             reward = 0.0
         else:
-            # The mover just *finished* its turn; current_player has already
-            # flipped to the opponent.  The winner is 3 - current_player.
             prev_player = 3 - self.state.current_player
             reward = 1.0 if w == prev_player else -1.0
 
@@ -77,47 +75,43 @@ class QuoridorEnv:
 
     def clone(self) -> "QuoridorEnv":
         env = QuoridorEnv.__new__(QuoridorEnv)
-        env.state = self.state  # immutable — safe to share
+        env.state = self.state
         env._rng = np.random.default_rng()
         return env
 
     # ------------------------------------------------------------------
     def render(self) -> str:
-        """ASCII render of the board."""
+        """Return an ASCII render of the current board."""
         s = self.state
-        lines = []
+        lines = [
+            f"Move {s.move_count} | Player {s.current_player}'s turn | "
+            f"P1 walls: {s.p1_walls} | P2 walls: {s.p2_walls}",
+            "    " + "   ".join(str(c) for c in range(BOARD_SIZE)),
+        ]
+
         for r in range(BOARD_SIZE - 1, -1, -1):
-            row_chars = []
+            cell_row = [f"{r}  "]
             for c in range(BOARD_SIZE):
                 if (r, c) == s.p1_pos:
-                    row_chars.append("1")
+                    cell = "1"
                 elif (r, c) == s.p2_pos:
-                    row_chars.append("2")
+                    cell = "2"
                 else:
-                    row_chars.append(".")
+                    cell = "."
 
-                # east wall?
+                cell_row.append(f" {cell} ")
                 if c < BOARD_SIZE - 1:
-                    if (r, c) in s.v_walls or (r - 1, c) in s.v_walls:
-                        row_chars.append("|")
-                    else:
-                        row_chars.append(" ")
-            lines.append(" ".join(row_chars))
+                    wall = "|" if (r, c) in s.v_walls or (r - 1, c) in s.v_walls else " "
+                    cell_row.append(wall)
+            lines.append("".join(cell_row))
 
-            # south wall row
             if r > 0:
-                wall_row = []
+                wall_row = ["   "]
                 for c in range(BOARD_SIZE):
-                    if (r - 1, c) in s.h_walls or (r - 1, c - 1) in s.h_walls:
-                        wall_row.append("—")
-                    else:
-                        wall_row.append(" ")
+                    wall = "---" if (r - 1, c) in s.h_walls or (r - 1, c - 1) in s.h_walls else "   "
+                    wall_row.append(wall)
                     if c < BOARD_SIZE - 1:
                         wall_row.append(" ")
-                lines.append(" ".join(wall_row))
+                lines.append("".join(wall_row))
 
-        header = (
-            f"Move {s.move_count} | Player {s.current_player}'s turn | "
-            f"P1 walls: {s.p1_walls} | P2 walls: {s.p2_walls}"
-        )
-        return header + "\n" + "\n".join(lines)
+        return "\n".join(lines)

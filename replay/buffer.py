@@ -16,6 +16,7 @@ changing the buffer interface.
 """
 from __future__ import annotations
 
+from pathlib import Path
 import threading
 from typing import Tuple
 
@@ -96,3 +97,41 @@ class ReplayBuffer:
 
     def is_ready(self, min_size: int) -> bool:
         return self._size >= min_size
+
+    # ------------------------------------------------------------------
+    def save(self, path: str | Path) -> Path:
+        """Persist the currently populated portion of the ring buffer."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._lock:
+            size = self._size
+            ptr = self._ptr
+            np.savez_compressed(
+                path,
+                capacity=np.array(self.capacity, dtype=np.int64),
+                size=np.array(size, dtype=np.int64),
+                ptr=np.array(ptr, dtype=np.int64),
+                obs=self._obs[:size],
+                policy=self._policy[:size],
+                value=self._value[:size],
+                weights=self._weights[:size],
+            )
+        return path
+
+    @classmethod
+    def load(cls, path: str | Path, capacity: int | None = None) -> "ReplayBuffer":
+        """Load a replay buffer saved by save()."""
+        path = Path(path)
+        with np.load(path, allow_pickle=False) as data:
+            saved_capacity = int(data["capacity"])
+            size = int(data["size"])
+            ptr = int(data["ptr"])
+            buffer = cls(capacity=max(capacity or saved_capacity, size))
+            buffer._size = size
+            buffer._ptr = ptr % buffer.capacity if buffer.capacity == saved_capacity else size % buffer.capacity
+            buffer._obs[:size] = data["obs"]
+            buffer._policy[:size] = data["policy"]
+            buffer._value[:size] = data["value"]
+            buffer._weights[:size] = data["weights"]
+        return buffer

@@ -4,7 +4,7 @@ project: quoridor_alpha_zero
 env:
   board_size:  9
   max_walls:  10
-  max_moves:  500      # draw condition (IMPROVEMENT: prevents infinite games)
+  max_moves:  300      # draw condition (IMPROVEMENT: prevents infinite games)
 
 # ── Network ────────────────────────────────────────────────
 network:
@@ -17,7 +17,7 @@ network:
 
 # ── MCTS ───────────────────────────────────────────────────
 mcts:
-  num_simulations: 800
+  num_simulations: 500
   c_puct:          1.5
   dirichlet_alpha: 0.3
   noise_frac:      0.25
@@ -42,7 +42,7 @@ training:
 
 # ── Replay buffer ──────────────────────────────────────────
 replay:
-  capacity:     500000
+  capacity:     300000
   min_size:     10000
 
 # ── Self-play ──────────────────────────────────────────────
