@@ -74,7 +74,9 @@ class PolicyValueNet(nn.Module):
 
     # -----------------------------------------------------------------------
     def _init_weights(self) -> None:
-        """Kaiming normal init for all conv layers; zero-bias everywhere."""
+        """Kaiming normal init for all conv layers; zero-bias everywhere.
+        Special handling for policy head final layer to ensure uniform
+        initial policy distribution."""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
@@ -87,6 +89,11 @@ class PolicyValueNet(nn.Module):
                 nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
+        
+        # Special: policy head output layer should have small weights
+        # to ensure uniform initial distribution (logits ≈ 0)
+        if isinstance(self.policy_head[-1], nn.Linear):
+            nn.init.uniform_(self.policy_head[-1].weight, -0.01, 0.01)
 
     # -----------------------------------------------------------------------
     def forward(

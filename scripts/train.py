@@ -76,11 +76,14 @@ def save_replay_buffer(buffer: ReplayBuffer, path: pathlib.Path) -> None:
 def fill_buffer_randomly(buffer: ReplayBuffer, target: int) -> None:
     print(f"Cold-start: filling buffer with random games to {target} samples...")
     try:
+        # Cold-start with random play — still use higher Dirichlet for
+        # better exploration diversity of action types (moves vs walls)
         gen = GameGenerator(
             inference_fn=None,
             num_simulations=0,
             augment=True,
-            random_policy=True,
+            dirichlet_alpha=1.0,  # Encourages diverse action exploration
+            noise_frac=0.5,       # Even though random, structure helps
         )
         while buffer.size < target:
             steps = gen.generate()
@@ -105,14 +108,22 @@ def selfplay_worker(
     warmup_sims: int = 100,
     min_buffer_size: int = 2_000,
 ) -> None:
+    # Warmup: stronger Dirichlet noise (higher alpha) to encourage
+    # diverse exploration across moves AND walls, not just one action type
     gen_warmup = GameGenerator(
         inference_fn=inference_fn,
         num_simulations=warmup_sims,
+        dirichlet_alpha=1.0,     # Higher: more uniform exploration
+        noise_frac=0.5,          # More influential noise during warmup
         augment=True,
     )
+    # Full play: still encourage diverse exploration but slightly less than warmup
+    # This maintains action diversity throughout training, not just early on
     gen_full = GameGenerator(
         inference_fn=inference_fn,
         num_simulations=num_simulations,
+        dirichlet_alpha=0.5,     # Better than standard (0.3), encourages diversity
+        noise_frac=0.35,         # Stronger than standard (0.25) for better exploration
         augment=True,
     )
 

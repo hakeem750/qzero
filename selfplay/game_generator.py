@@ -33,11 +33,17 @@ class TrajectoryStep:
 
 def _temperature(move_number: int) -> float:
     """
-    Exploration schedule:
-      - First 20 half-moves: temperature=1.0 (broad exploration)
-      - After:               temperature=0.1 (near-greedy)
+    Exploration schedule — encourage diverse action types (moves vs walls).
+      - First 40 half-moves: temperature=1.0 (broad exploration)
+      - Moves 40-80:         temperature=0.5 (moderate exploration)
+      - After 80:            temperature=0.1 (near-greedy)
     """
-    return 1.0 if move_number < 20 else 0.1
+    if move_number < 40:
+        return 1.0
+    elif move_number < 80:
+        return 0.5
+    else:
+        return 0.1
 
 
 def _safe_sample_policy(policy: np.ndarray, state: QuoridorState) -> np.ndarray:
