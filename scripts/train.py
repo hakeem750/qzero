@@ -14,6 +14,7 @@ import pathlib
 import sys
 import threading
 import time
+import traceback
 
 import numpy as np
 import torch
@@ -67,24 +68,63 @@ def save_replay_buffer(buffer: ReplayBuffer, path: pathlib.Path) -> None:
     print(f"  saved replay buffer ({buffer.size} samples) to {saved_path} in {time.time() - t0:.1f}s")
 
 
+# ---------------------------------------------------------------------------
+# Cold-start: fill buffer with random games — zero inference cost.
+# Requires GameGenerator to support inference_fn=None / random_policy=True.
+# If your GameGenerator doesn't support this, remove the call in main().
+# ---------------------------------------------------------------------------
+def fill_buffer_randomly(buffer: ReplayBuffer, target: int) -> None:
+    print(f"Cold-start: filling buffer with random games to {target} samples...")
+    try:
+        gen = GameGenerator(
+            inference_fn=None,
+            num_simulations=0,
+            augment=True,
+            random_policy=True,
+        )
+        while buffer.size < target:
+            steps = gen.generate()
+            for step in steps:
+                buffer.push(step.obs, step.policy, step.outcome)
+            print(f"  cold-start: {buffer.size} / {target}", end="\r")
+        print(f"\n  Cold-start done: {buffer.size} samples")
+    except Exception:
+        # GameGenerator doesn't support random mode — skip silently.
+        print("  Cold-start skipped (GameGenerator does not support random_policy).")
+
+
+# ---------------------------------------------------------------------------
+# Selfplay worker: uses cheap warmup sims until buffer is ready, then
+# switches to full sims. Full traceback on errors so nothing stays silent.
+# ---------------------------------------------------------------------------
 def selfplay_worker(
     inference_fn,
     buffer: ReplayBuffer,
     num_simulations: int,
     stop_event: threading.Event,
+    warmup_sims: int = 20,
+    min_buffer_size: int = 2_000,
 ) -> None:
-    gen = GameGenerator(
+    gen_warmup = GameGenerator(
+        inference_fn=inference_fn,
+        num_simulations=warmup_sims,
+        augment=True,
+    )
+    gen_full = GameGenerator(
         inference_fn=inference_fn,
         num_simulations=num_simulations,
         augment=True,
     )
+
     while not stop_event.is_set():
+        gen = gen_warmup if buffer.size < min_buffer_size else gen_full
         try:
             steps = gen.generate()
             for step in steps:
                 buffer.push(step.obs, step.policy, step.outcome)
-        except Exception as e:
-            print(f"[selfplay worker error] {e}")
+        except Exception:
+            traceback.print_exc()   # full stack trace — never silent
+            time.sleep(1)           # avoid a tight error loop
 
 
 def print_training_status(metrics: dict, buffer: ReplayBuffer, elapsed: float) -> None:
@@ -106,20 +146,27 @@ def print_training_status(metrics: dict, buffer: ReplayBuffer, elapsed: float) -
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--num_workers", type=int, default=2)
-    parser.add_argument("--num_sims", type=int, default=200)
-    parser.add_argument("--train_steps", type=int, default=100_000)
-    parser.add_argument("--eval_every", type=int, default=2_000)
-    parser.add_argument("--ckpt_every", type=int, default=500)
-    parser.add_argument("--log_every", type=int, default=100)
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--buffer_path", type=pathlib.Path, default=DEFAULT_BUFFER_PATH)
-    parser.add_argument("--resume_buffer", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--fresh_buffer", action="store_true", help="Start with an empty replay buffer instead of loading the saved one.")
-    parser.add_argument("--save_buffer_every", type=int, default=1_000)
-    parser.add_argument("--min_buffer_size", type=int, default=2_000)
+    parser.add_argument("--seed",            type=int,            default=42)
+    parser.add_argument("--device",          type=str,            default="cuda" if torch.cuda.is_available() else "cpu")
+    # Raised from 2 → 8 so there are enough concurrent requests to saturate
+    # the inference server and reduce per-call latency during buffer fill.
+    parser.add_argument("--num_workers",     type=int,            default=8)
+    parser.add_argument("--num_sims",        type=int,            default=200)
+    # Cheap sims used only until min_buffer_size is reached (~10× faster fill).
+    parser.add_argument("--warmup_sims",     type=int,            default=20)
+    parser.add_argument("--train_steps",     type=int,            default=100_000)
+    parser.add_argument("--eval_every",      type=int,            default=2_000)
+    parser.add_argument("--ckpt_every",      type=int,            default=500)
+    parser.add_argument("--log_every",       type=int,            default=100)
+    parser.add_argument("--resume",          action="store_true")
+    parser.add_argument("--buffer_path",     type=pathlib.Path,   default=DEFAULT_BUFFER_PATH)
+    parser.add_argument("--resume_buffer",   action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--fresh_buffer",    action="store_true", help="Start with an empty replay buffer instead of loading the saved one.")
+    parser.add_argument("--save_buffer_every", type=int,          default=1_000)
+    parser.add_argument("--min_buffer_size", type=int,            default=2_000)
+    # Set to 0 to disable the random cold-start fill.
+    parser.add_argument("--cold_start_size", type=int,            default=1_000,
+                        help="Fill this many positions with random games before starting workers. Set 0 to skip.")
     return parser
 
 
@@ -138,8 +185,12 @@ def main() -> None:
         start_step = load_latest_checkpoint(model)
         best_model.load_state_dict(model.state_dict())
 
-    server = InferenceServer(model, device=str(device), batch_size=64)
+    # Inference batch size matched to worker count so the server flushes
+    # frequently instead of waiting to accumulate 64 requests from 2 workers.
+    inference_batch_size = min(args.num_workers, 32)
+    server = InferenceServer(model, device=str(device), batch_size=inference_batch_size)
     server.start()
+    print(f"Inference server started (batch_size={inference_batch_size})")
 
     def inference_fn(obs_np, mask_np):
         future = server.submit(obs_np[0], mask_np[0])
@@ -157,6 +208,12 @@ def main() -> None:
         else:
             print("Starting with a fresh replay buffer")
 
+    # Cold-start: fill half of min_buffer_size with free random games so
+    # workers immediately start with warmup sims rather than from zero.
+    cold_target = min(args.cold_start_size, args.min_buffer_size // 2)
+    if cold_target > 0 and buffer.size < cold_target:
+        fill_buffer_randomly(buffer, cold_target)
+
     cfg = TrainConfig(device=str(device), log_every=args.log_every)
     loop = TrainLoop(model, buffer, cfg)
     loop.step = start_step
@@ -168,16 +225,26 @@ def main() -> None:
     for _ in range(args.num_workers):
         t = threading.Thread(
             target=selfplay_worker,
-            args=(inference_fn, buffer, args.num_sims, stop_event),
+            args=(inference_fn, buffer, args.num_sims, stop_event,
+                  args.warmup_sims, args.min_buffer_size),
             daemon=True,
         )
         t.start()
         workers.append(t)
 
-    print("Self-play workers started. Waiting for buffer to fill...")
+    print(
+        f"Started {args.num_workers} self-play workers "
+        f"(warmup_sims={args.warmup_sims}, full_sims={args.num_sims}). "
+        f"Waiting for buffer to fill to {args.min_buffer_size}..."
+    )
     while not buffer.is_ready(args.min_buffer_size):
         time.sleep(2)
-        print(f"  Buffer: {buffer.size} / {args.min_buffer_size}")
+        alive = sum(t.is_alive() for t in workers)
+        print(f"  Buffer: {buffer.size:>5} / {args.min_buffer_size}  workers_alive={alive}/{len(workers)}")
+        if alive == 0:
+            print("ERROR: all selfplay workers have crashed. Check tracebacks above.")
+            server.stop()
+            sys.exit(1)
 
     print("Training started.")
     train_t0 = time.time()
