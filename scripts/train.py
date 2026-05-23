@@ -166,7 +166,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Cheap sims used only until min_buffer_size is reached (~10× faster fill).
     parser.add_argument("--warmup_sims",     type=int,            default=20)
     parser.add_argument("--train_steps",     type=int,            default=100_000)
-    parser.add_argument("--eval_every",      type=int,            default=2_000)
+    parser.add_argument("--eval_every",      type=int,            default=5_000)
+    parser.add_argument("--eval_games",      type=int,            default=4)
+    parser.add_argument("--eval_sims",       type=int,            default=25)
+    parser.add_argument("--eval_max_moves",  type=int,            default=120)
     parser.add_argument("--ckpt_every",      type=int,            default=500)
     parser.add_argument("--log_every",       type=int,            default=100)
     parser.add_argument("--resume",          action="store_true")
@@ -229,7 +232,13 @@ def main() -> None:
     loop = TrainLoop(model, buffer, cfg)
     loop.step = start_step
 
-    arena = Arena(num_games=20, num_sims=100, win_thresh=0.55, device=str(device))
+    arena = Arena(
+        num_games=args.eval_games,
+        num_sims=args.eval_sims,
+        win_thresh=0.55,
+        max_moves=args.eval_max_moves,
+        device=str(device),
+    )
 
     stop_event = threading.Event()
     workers = []
@@ -277,7 +286,7 @@ def main() -> None:
 
             if (loop.step % args.eval_every) == 0:
                 print(f"\n[step {loop.step}] Running evaluation...")
-                result = arena.evaluate(model, best_model)
+                result = arena.evaluate(model, best_model, progress=True)
                 print(
                     f"  win_rate={result['win_rate']:.3f}  "
                     f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "

@@ -165,10 +165,9 @@ import numpy as np
 import torch
 
 from env.quoridor_env import QuoridorEnv
-from env.rules import is_terminal, winner
-from env.encoding import encode_state
-from env.actions import NUM_ACTIONS
+from env.state import MAX_MOVES
 from mcts.search import MCTS, _legal_mask
+from selfplay.game_generator import _adjudicated_winner
 
 
 def _greedy_inference(model, device, dtype):
@@ -191,6 +190,7 @@ def play_game(
     a_is_p1: bool,
     num_simulations: int = 400,
     seed: int = 0,
+    max_moves: int = MAX_MOVES,
 ) -> int:
     """
     Play one game. Returns winner: 1 or 2 (or 0 for draw).
@@ -206,7 +206,7 @@ def play_game(
     root_a = mcts_a.new_root(env.state)
     root_b = mcts_b.new_root(env.state)
 
-    while not env.is_terminal():
+    while not env.is_terminal() and env.state.move_count < max_moves:
         cur = env.state.current_player
         if (cur == 1) == a_is_p1:
             mcts, fn, root = mcts_a, model_a_fn, root_a
@@ -228,7 +228,7 @@ def play_game(
         else:
             root_b = mcts_b.new_root(env.state)
 
-    return env.winner() or 0
+    return _adjudicated_winner(env.state)
 
 
 class Arena:
@@ -241,29 +241,42 @@ class Arena:
         num_games:   int   = 100,
         num_sims:    int   = 400,
         win_thresh:  float = 0.55,
+        max_moves:   int   = MAX_MOVES,
         device: str        = "cuda",
     ) -> None:
         self.num_games  = num_games
         self.num_sims   = num_sims
         self.win_thresh = win_thresh
+        self.max_moves  = max_moves
         self.device     = torch.device(device if torch.cuda.is_available() else "cpu")
         self.dtype      = torch.bfloat16
 
-    def evaluate(self, candidate, best_model) -> dict:
+    def evaluate(self, candidate, best_model, progress: bool = False) -> dict:
+        import time
+
         fn_cand = _greedy_inference(candidate,  self.device, self.dtype)
         fn_best = _greedy_inference(best_model, self.device, self.dtype)
 
         wins = draws = losses = 0
+        t0 = time.time()
         for i in range(self.num_games):
             a_is_p1 = (i % 2 == 0)   # alternate starting sides
             result = play_game(fn_cand, fn_best, a_is_p1=a_is_p1,
-                               num_simulations=self.num_sims, seed=i)
+                               num_simulations=self.num_sims, seed=i,
+                               max_moves=self.max_moves)
             if result == 0:
                 draws += 1
             elif (result == 1) == a_is_p1:
                 wins += 1
             else:
                 losses += 1
+            if progress:
+                elapsed = time.time() - t0
+                print(
+                    f"  eval game {i + 1}/{self.num_games}: "
+                    f"W/D/L={wins}/{draws}/{losses}  t={elapsed:.1f}s",
+                    flush=True,
+                )
 
         total = wins + draws + losses
         win_rate = (wins + 0.5 * draws) / total
