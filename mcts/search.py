@@ -165,6 +165,8 @@ class MCTS:
         Synchronous (single-threaded) MCTS for evaluation and testing.
         inference_fn is called once per simulation.
         """
+        simulations_remaining = num_simulations
+
         if not root.expanded:
             obs = encode_state(root.state)
             mask = _legal_mask(root.state)
@@ -172,10 +174,12 @@ class MCTS:
             self.expand(root, policy[0])
             if add_noise:
                 self.add_dirichlet_noise(root)
+            if num_simulations <= 0:
+                return
             root.backup(value[0, 0])
-            return
+            simulations_remaining -= 1
 
-        for _ in range(num_simulations):
+        for _ in range(simulations_remaining):
             path, leaf = self._select(root)
 
             if is_terminal(leaf.state):

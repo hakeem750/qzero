@@ -64,6 +64,7 @@ class QuoridorState:
             self.h_walls, self.v_walls,
             self.p1_walls, self.p2_walls,
             self.current_player,
+            self.move_count,
         ))
 
 

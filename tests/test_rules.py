@@ -101,7 +101,7 @@ class TestWallBlocking:
     def test_h_wall_blocks_northward(self):
         # h_wall at (1,3) blocks (1,3)↔(2,3) and (1,4)↔(2,4)
         hw = frozenset({(1, 3)})
-        s = _make_state(p1_pos=(1, 4), h_walls=hw)
+        s = _make_state(p1_pos=(2, 4), h_walls=hw)
         acts = legal_actions(s)
         assert 0 not in acts   # north blocked
 
@@ -135,7 +135,7 @@ class TestWallBlocking:
 
 class TestJumps:
     def test_jump_north_over_opponent(self):
-        s = _make_state(p1_pos=(2, 4), p2_pos=(3, 4))
+        s = _make_state(p1_pos=(2, 4), p2_pos=(1, 4))
         acts = legal_actions(s)
         assert 4 in acts   # jump_north
 
@@ -171,6 +171,11 @@ class TestTerminal:
         s = _make_state(move_count=MAX_MOVES)
         assert is_terminal(s)
         assert winner(s) == 0
+
+    def test_hash_includes_move_count(self):
+        s1 = _make_state(move_count=10)
+        s2 = _make_state(move_count=11)
+        assert hash(s1) != hash(s2)
 
     def test_initial_not_terminal(self):
         s = initial_state()

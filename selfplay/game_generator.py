@@ -10,18 +10,17 @@ IMPROVEMENT: Symmetry augmentation baked in here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional, Callable, Tuple
+from dataclasses import dataclass
+from typing import Callable, List, Tuple
 
 import numpy as np
 
 from env.quoridor_env import QuoridorEnv
 from env.encoding import encode_state, mirror_state_and_policy
-from env.rules import legal_actions, is_terminal, winner
-from env.state import QuoridorState
+from env.rules import legal_actions, can_move
+from env.state import QuoridorState, BOARD_SIZE
 from env.actions import NUM_ACTIONS
-from mcts.search import MCTS, _legal_mask
-from mcts.node import Node
+from mcts.search import MCTS
 
 
 @dataclass(slots=True)
@@ -65,6 +64,63 @@ def _safe_sample_policy(policy: np.ndarray, state: QuoridorState) -> np.ndarray:
     return policy
 
 
+def _uniform_inference(obs_batch: np.ndarray, mask_batch: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    policy = mask_batch.astype(np.float64)
+    totals = policy.sum(axis=1, keepdims=True)
+    np.divide(policy, totals, out=policy, where=totals > 0)
+    value = np.zeros((obs_batch.shape[0], 1), dtype=np.float32)
+    return policy, value
+
+
+def _shortest_path_distance(
+    start: tuple[int, int],
+    goal_row: int,
+    h_walls: frozenset[tuple[int, int]],
+    v_walls: frozenset[tuple[int, int]],
+) -> int:
+    frontier = [(start, 0)]
+    visited = {start}
+    for (r, c), dist in frontier:
+        if r == goal_row:
+            return dist
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                if (nr, nc) not in visited and can_move(r, c, nr, nc, h_walls, v_walls):
+                    visited.add((nr, nc))
+                    frontier.append(((nr, nc), dist + 1))
+    return BOARD_SIZE * BOARD_SIZE
+
+
+def _adjudicated_winner(state: QuoridorState) -> int:
+    """
+    Return the real winner, or adjudicate artificial max-move draws.
+
+    Self-play games can otherwise teach the value head an all-zero target while
+    weak agents learn to burn walls and shuffle. Shortest path is a stable
+    Quoridor-specific tiebreak: closer to goal wins; equal distance falls back
+    to raw pawn progress, then remains a draw if still tied.
+    """
+    if state.p1_pos[0] == BOARD_SIZE - 1:
+        return 1
+    if state.p2_pos[0] == 0:
+        return 2
+
+    p1_dist = _shortest_path_distance(state.p1_pos, BOARD_SIZE - 1, state.h_walls, state.v_walls)
+    p2_dist = _shortest_path_distance(state.p2_pos, 0, state.h_walls, state.v_walls)
+    if p1_dist < p2_dist:
+        return 1
+    if p2_dist < p1_dist:
+        return 2
+
+    p1_progress = state.p1_pos[0]
+    p2_progress = BOARD_SIZE - 1 - state.p2_pos[0]
+    if p1_progress > p2_progress:
+        return 1
+    if p2_progress > p1_progress:
+        return 2
+    return 0
+
+
 class GameGenerator:
     """
     Runs one complete self-play game using MCTS + neural network.
@@ -88,7 +144,7 @@ class GameGenerator:
         noise_frac: float = 0.25,
         augment: bool = True,           # IMPROVEMENT
     ) -> None:
-        self.inference_fn = inference_fn
+        self.inference_fn = inference_fn or _uniform_inference
         self.num_simulations = num_simulations
         self.augment = augment
         self.mcts = MCTS(
@@ -151,7 +207,7 @@ class GameGenerator:
 
             env.step(action)
 
-        game_winner = env.winner()
+        game_winner = _adjudicated_winner(env.state)
 
         # Assign outcomes (from each player's perspective at the time)
         steps: List[TrajectoryStep] = []

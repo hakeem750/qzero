@@ -55,3 +55,21 @@ class TestMCTSVirtualLoss:
 
         for child in root.children.values():
             assert child.virtual_loss >= 0
+
+    def test_unexpanded_root_uses_requested_simulations(self):
+        mcts = MCTS(virtual_loss=1)
+        root = mcts.new_root(initial_state())
+        calls = 0
+
+        def inference_fn(obs_batch, mask_batch):
+            nonlocal calls
+            calls += 1
+            policy = mask_batch.astype(np.float64)
+            policy /= policy.sum(axis=1, keepdims=True)
+            value = np.zeros((obs_batch.shape[0], 1), dtype=np.float32)
+            return policy, value
+
+        mcts.run_simulations_sync(root, inference_fn, num_simulations=5)
+
+        assert calls == 5
+        assert root.visit_count == 5
