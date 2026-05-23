@@ -3,7 +3,8 @@ scripts/train.py - Main AlphaZero training orchestrator.
 
 Usage:
   python scripts/train.py
-  python scripts/train.py --resume --resume_buffer
+  python scripts/train.py --resume
+  python scripts/train.py --fresh_buffer
 """
 from __future__ import annotations
 
@@ -111,11 +112,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_sims", type=int, default=200)
     parser.add_argument("--train_steps", type=int, default=100_000)
     parser.add_argument("--eval_every", type=int, default=2_000)
-    parser.add_argument("--ckpt_every", type=int, default=1_000)
+    parser.add_argument("--ckpt_every", type=int, default=500)
     parser.add_argument("--log_every", type=int, default=100)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--buffer_path", type=pathlib.Path, default=DEFAULT_BUFFER_PATH)
-    parser.add_argument("--resume_buffer", action="store_true")
+    parser.add_argument("--resume_buffer", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--fresh_buffer", action="store_true", help="Start with an empty replay buffer instead of loading the saved one.")
     parser.add_argument("--save_buffer_every", type=int, default=1_000)
     parser.add_argument("--min_buffer_size", type=int, default=2_000)
     return parser
@@ -144,13 +146,16 @@ def main() -> None:
         policy, value = future.result()
         return policy[np.newaxis], np.array([[value]])
 
-    if args.resume_buffer and args.buffer_path.exists():
+    resume_buffer = not args.fresh_buffer
+    if resume_buffer and args.buffer_path.exists():
         buffer = ReplayBuffer.load(args.buffer_path, capacity=500_000)
         print(f"Loaded replay buffer from {args.buffer_path} ({buffer.size} samples)")
     else:
         buffer = ReplayBuffer(capacity=500_000)
-        if args.resume_buffer:
+        if resume_buffer:
             print(f"No replay buffer found at {args.buffer_path}; starting empty")
+        else:
+            print("Starting with a fresh replay buffer")
 
     cfg = TrainConfig(device=str(device), log_every=args.log_every)
     loop = TrainLoop(model, buffer, cfg)
