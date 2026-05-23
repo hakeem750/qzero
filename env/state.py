@@ -17,7 +17,7 @@ from dataclasses import dataclass
 BOARD_SIZE = 9
 MAX_WALLS   = 10
 WALL_GRID   = 8      # anchor grid is 8×8
-MAX_MOVES   = 120    # draw after this many half-moves
+MAX_MOVES   = 300    # draw after this many half-moves (increased to allow decisive games)
 
 
 @dataclass(frozen=True, slots=True)

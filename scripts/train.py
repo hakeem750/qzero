@@ -102,7 +102,7 @@ def selfplay_worker(
     buffer: ReplayBuffer,
     num_simulations: int,
     stop_event: threading.Event,
-    warmup_sims: int = 20,
+    warmup_sims: int = 100,
     min_buffer_size: int = 2_000,
 ) -> None:
     gen_warmup = GameGenerator(

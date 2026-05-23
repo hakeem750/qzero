@@ -76,6 +76,10 @@ class MCTS:
         node.add_virtual_loss(self.vl)
         while node.expanded and not is_terminal(node.state):
             best_action, best_child = self._best_child(node)
+            # If best_child is None, node has no children despite being expanded
+            # (terminal state or all actions blocked). Stop here.
+            if best_child is None:
+                break
             best_child.add_virtual_loss(self.vl)   # IMPROVEMENT
             path.append(best_child)
             node = best_child
@@ -146,7 +150,9 @@ class MCTS:
         noise = np.random.dirichlet([self.dirichlet_alpha] * len(actions))
         for a, n in zip(actions, noise):
             child = root.children[a]
-            child.prior = (1 - self.noise_frac) * child.prior + self.noise_frac * n
+            # Ensure prior stays positive after noise mixing
+            new_prior = (1 - self.noise_frac) * child.prior + self.noise_frac * n
+            child.prior = max(1e-8, new_prior)  # avoid log(0) issues
 
     def run_simulations_sync(
         self,
