@@ -30,6 +30,7 @@ from trainer.train_loop import TrainConfig, TrainLoop
 
 
 CKPT_DIR = pathlib.Path("checkpoints")
+BEST_CKPT_PATH = CKPT_DIR / "best_model.pt"
 DEFAULT_BUFFER_PATH = pathlib.Path("data") / "replay_buffer.npz"
 
 
@@ -52,6 +53,13 @@ def save_checkpoint(model: PolicyValueNet, step: int) -> pathlib.Path:
     return path
 
 
+def save_best_checkpoint(model: PolicyValueNet, step: int) -> pathlib.Path:
+    CKPT_DIR.mkdir(exist_ok=True)
+    torch.save({"step": step, "model": model.state_dict()}, BEST_CKPT_PATH)
+    print(f"  saved best model {BEST_CKPT_PATH} (step {step})")
+    return BEST_CKPT_PATH
+
+
 def load_latest_checkpoint(model: PolicyValueNet) -> int:
     ckpts = sorted(CKPT_DIR.glob("model_step_*.pt"))
     if not ckpts:
@@ -59,6 +67,35 @@ def load_latest_checkpoint(model: PolicyValueNet) -> int:
     model.load_state_dict(torch.load(ckpts[-1], map_location="cpu"))
     step = int(ckpts[-1].stem.split("_")[-1])
     print(f"Resumed model from {ckpts[-1]}")
+    return step
+
+
+def load_best_checkpoint(model: PolicyValueNet) -> int | None:
+    if not BEST_CKPT_PATH.exists():
+        return None
+    data = torch.load(BEST_CKPT_PATH, map_location="cpu")
+    if isinstance(data, dict) and "model" in data:
+        model.load_state_dict(data["model"])
+        step = int(data.get("step", 0))
+    else:
+        model.load_state_dict(data)
+        step = 0
+    print(f"Loaded best model from {BEST_CKPT_PATH} (step {step})")
+    return step
+
+
+def load_previous_checkpoint(model: PolicyValueNet, before_step: int) -> int | None:
+    ckpts = sorted(CKPT_DIR.glob("model_step_*.pt"))
+    previous = [
+        path for path in ckpts
+        if int(path.stem.split("_")[-1]) < before_step
+    ]
+    if not previous:
+        return None
+    path = previous[-1]
+    model.load_state_dict(torch.load(path, map_location="cpu"))
+    step = int(path.stem.split("_")[-1])
+    print(f"No saved best model found; using previous checkpoint as best: {path}")
     return step
 
 
@@ -166,10 +203,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Cheap sims used only until min_buffer_size is reached (~10× faster fill).
     parser.add_argument("--warmup_sims",     type=int,            default=20)
     parser.add_argument("--train_steps",     type=int,            default=100_000)
-    parser.add_argument("--eval_every",      type=int,            default=5_000)
+    parser.add_argument("--eval_every",      type=int,            default=2_000,
+                        help="Run evaluation every N training steps. Set 0 to disable.")
+    parser.add_argument("--eval_now",        action="store_true",
+                        help="Run one evaluation immediately after the buffer is ready.")
     parser.add_argument("--eval_games",      type=int,            default=4)
     parser.add_argument("--eval_sims",       type=int,            default=25)
     parser.add_argument("--eval_max_moves",  type=int,            default=120)
+    parser.add_argument("--win_thresh",      type=float,          default=0.55)
     parser.add_argument("--ckpt_every",      type=int,            default=500)
     parser.add_argument("--log_every",       type=int,            default=100)
     parser.add_argument("--resume",          action="store_true")
@@ -195,9 +236,20 @@ def main() -> None:
     best_model = copy.deepcopy(model)
 
     start_step = 0
+    best_step = None
     if args.resume:
         start_step = load_latest_checkpoint(model)
-        best_model.load_state_dict(model.state_dict())
+        best_step = load_best_checkpoint(best_model)
+        if best_step is None:
+            best_step = load_previous_checkpoint(best_model, start_step)
+        if best_step is None:
+            best_model.load_state_dict(model.state_dict())
+            best_step = start_step
+            save_best_checkpoint(best_model, best_step)
+            print("Initialized best model from the current checkpoint.")
+    else:
+        best_step = 0
+        save_best_checkpoint(best_model, best_step)
 
     # Inference batch size matched to worker count so the server flushes
     # frequently instead of waiting to accumulate 64 requests from 2 workers.
@@ -235,7 +287,7 @@ def main() -> None:
     arena = Arena(
         num_games=args.eval_games,
         num_sims=args.eval_sims,
-        win_thresh=0.55,
+        win_thresh=args.win_thresh,
         max_moves=args.eval_max_moves,
         device=str(device),
     )
@@ -257,6 +309,16 @@ def main() -> None:
         f"(warmup_sims={args.warmup_sims}, full_sims={args.num_sims}). "
         f"Waiting for buffer to fill to {args.min_buffer_size}..."
     )
+    if args.eval_every > 0:
+        next_eval_step = ((loop.step // args.eval_every) + 1) * args.eval_every
+        print(
+            f"Evaluation: every {args.eval_every} steps "
+            f"({args.eval_games} games, {args.eval_sims} sims, max_moves={args.eval_max_moves}, "
+            f"best_step={best_step}); "
+            f"next at step {next_eval_step}."
+        )
+    else:
+        print("Evaluation: disabled (--eval_every=0).")
     while not buffer.is_ready(args.min_buffer_size):
         time.sleep(2)
         alive = sum(t.is_alive() for t in workers)
@@ -269,6 +331,20 @@ def main() -> None:
     print("Training started.")
     train_t0 = time.time()
     try:
+        if args.eval_now:
+            print(f"\n[step {loop.step}] Running evaluation (--eval_now)...")
+            result = arena.evaluate(model, best_model, progress=True)
+            print(
+                f"  win_rate={result['win_rate']:.3f}  "
+                f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
+                f"promoted={result['promoted']}"
+            )
+            if result["promoted"]:
+                best_model.load_state_dict(model.state_dict())
+                best_step = loop.step
+                save_best_checkpoint(best_model, best_step)
+                print("  New best model promoted!")
+
         for _ in range(args.train_steps):
             metrics = loop.train_step()
             if metrics.get("skipped"):
@@ -284,7 +360,7 @@ def main() -> None:
             if args.save_buffer_every > 0 and (loop.step % args.save_buffer_every) == 0:
                 save_replay_buffer(buffer, args.buffer_path)
 
-            if (loop.step % args.eval_every) == 0:
+            if args.eval_every > 0 and (loop.step % args.eval_every) == 0:
                 print(f"\n[step {loop.step}] Running evaluation...")
                 result = arena.evaluate(model, best_model, progress=True)
                 print(
@@ -294,6 +370,8 @@ def main() -> None:
                 )
                 if result["promoted"]:
                     best_model.load_state_dict(model.state_dict())
+                    best_step = loop.step
+                    save_best_checkpoint(best_model, best_step)
                     print("  New best model promoted!")
     except KeyboardInterrupt:
         print("\nInterrupted; saving checkpoint and replay buffer...")
