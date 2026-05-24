@@ -167,7 +167,11 @@ import torch
 from env.quoridor_env import QuoridorEnv
 from env.state import MAX_MOVES
 from mcts.search import MCTS, _legal_mask
-from selfplay.game_generator import _adjudicated_winner
+from selfplay.game_generator import (
+    _adjudicated_winner,
+    _state_cycle_key,
+    select_action_with_progress,
+)
 
 
 def _greedy_inference(model, device, dtype):
@@ -205,6 +209,7 @@ def play_game(
 
     root_a = mcts_a.new_root(env.state)
     root_b = mcts_b.new_root(env.state)
+    seen_counts = {_state_cycle_key(env.state): 1}
 
     while not env.is_terminal() and env.state.move_count < max_moves:
         cur = env.state.current_player
@@ -214,8 +219,16 @@ def play_game(
             mcts, fn, root = mcts_b, model_b_fn, root_b
 
         mcts.run_simulations_sync(root, fn, num_simulations, add_noise=False)
-        action = int(np.argmax(mcts.action_probs(root, temperature=0.0)))
+        policy = mcts.action_probs(root, temperature=1.0)
+        action = select_action_with_progress(
+            policy,
+            env.state,
+            temperature=0.0,
+            seen_counts=seen_counts,
+        )
         env.step(action)
+        key = _state_cycle_key(env.state)
+        seen_counts[key] = seen_counts.get(key, 0) + 1
 
         # Tree reuse
         if action in root_a.children:

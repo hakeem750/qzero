@@ -17,7 +17,7 @@ import numpy as np
 
 from env.quoridor_env import QuoridorEnv
 from env.encoding import encode_state, mirror_state_and_policy
-from env.rules import legal_actions, can_move
+from env.rules import legal_actions, can_move, apply_action
 from env.state import QuoridorState, BOARD_SIZE
 from env.actions import NUM_ACTIONS
 from mcts.search import MCTS
@@ -121,6 +121,63 @@ def _adjudicated_winner(state: QuoridorState) -> int:
     return 0
 
 
+def _state_cycle_key(state: QuoridorState) -> tuple:
+    return (
+        state.p1_pos,
+        state.p2_pos,
+        state.h_walls,
+        state.v_walls,
+        state.p1_walls,
+        state.p2_walls,
+        state.current_player,
+    )
+
+
+def _player_distance(state: QuoridorState, player: int) -> int:
+    if player == 1:
+        return _shortest_path_distance(state.p1_pos, BOARD_SIZE - 1, state.h_walls, state.v_walls)
+    return _shortest_path_distance(state.p2_pos, 0, state.h_walls, state.v_walls)
+
+
+def select_action_with_progress(
+    policy: np.ndarray,
+    state: QuoridorState,
+    temperature: float,
+    seen_counts: dict[tuple, int],
+    progress_bias: float = 0.20,
+    repeat_penalty: float = 0.35,
+) -> int:
+    """
+    Select from MCTS policy while discouraging pathless shuffling.
+
+    The policy target is left unchanged for training. This only affects the
+    sampled game continuation, nudging near-ties toward shortest-path progress
+    and away from repeated layouts.
+    """
+    actions = legal_actions(state)
+    if not actions:
+        return int(np.argmax(policy))
+
+    base_dist = _player_distance(state, state.current_player)
+    scores = np.full(NUM_ACTIONS, -np.inf, dtype=np.float64)
+    for action in actions:
+        child = apply_action(state, action)
+        next_dist = _player_distance(child, state.current_player)
+        progress = base_dist - next_dist
+        repeat_count = seen_counts.get(_state_cycle_key(child), 0)
+        scores[action] = float(policy[action]) + progress_bias * progress - repeat_penalty * repeat_count
+
+    if temperature > 0.05:
+        weights = np.zeros(NUM_ACTIONS, dtype=np.float64)
+        action_scores = scores[actions]
+        action_scores -= np.max(action_scores)
+        weights[actions] = np.exp(action_scores / max(temperature, 1e-3))
+        weights = _safe_sample_policy(weights, state)
+        return int(np.random.choice(NUM_ACTIONS, p=weights))
+
+    return int(np.argmax(scores))
+
+
 class GameGenerator:
     """
     Runs one complete self-play game using MCTS + neural network.
@@ -165,6 +222,7 @@ class GameGenerator:
 
         # Raw trajectory buffer: (obs, policy, player_at_step)
         raw: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        seen_counts = {_state_cycle_key(env.state): 1}
 
         root = self.mcts.new_root(env.state)
 
@@ -189,11 +247,7 @@ class GameGenerator:
             obs = encode_state(env.state)
             raw.append((obs, policy, cur_player))
 
-            # Pick action (sample if temp > 0, argmax if near zero)
-            if temp > 0.05:
-                action = int(np.random.choice(NUM_ACTIONS, p=policy))
-            else:
-                action = int(np.argmax(policy))
+            action = select_action_with_progress(policy, env.state, temp, seen_counts)
 
             # Tree reuse: advance root
             if action in root.children:
@@ -202,10 +256,14 @@ class GameGenerator:
             else:
                 # Edge case: action not in tree (e.g. noise led to unexpected pick)
                 env.step(action)
+                key = _state_cycle_key(env.state)
+                seen_counts[key] = seen_counts.get(key, 0) + 1
                 root = self.mcts.new_root(env.state)
                 continue
 
             env.step(action)
+            key = _state_cycle_key(env.state)
+            seen_counts[key] = seen_counts.get(key, 0) + 1
 
         game_winner = _adjudicated_winner(env.state)
 

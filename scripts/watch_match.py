@@ -26,7 +26,11 @@ from evaluation.arena import _greedy_inference
 from mcts.search import MCTS
 from network.policy_value_net import build_net
 from scripts.play import BoardPane, describe_action
-from selfplay.game_generator import _adjudicated_winner
+from selfplay.game_generator import (
+    _adjudicated_winner,
+    _state_cycle_key,
+    select_action_with_progress,
+)
 
 
 CKPT_DIR = pathlib.Path("checkpoints")
@@ -60,10 +64,18 @@ def load_model(path: pathlib.Path, device: torch.device):
     return model
 
 
-def choose_action(mcts: MCTS, root, inference_fn, sims: int) -> tuple[int, np.ndarray]:
+def choose_action(
+    mcts: MCTS,
+    root,
+    inference_fn,
+    sims: int,
+    state,
+    seen_counts: dict[tuple, int],
+) -> tuple[int, np.ndarray]:
     mcts.run_simulations_sync(root, inference_fn, sims, add_noise=False)
-    probs = mcts.action_probs(root, temperature=0.0)
-    return int(np.argmax(probs)), probs
+    probs = mcts.action_probs(root, temperature=1.0)
+    action = select_action_with_progress(probs, state, temperature=0.0, seen_counts=seen_counts)
+    return action, probs
 
 
 def main() -> None:
@@ -122,6 +134,7 @@ def main() -> None:
     env = QuoridorEnv()
     env.reset(seed=args.seed)
     roots = {1: mcts[1].new_root(env.state), 2: mcts[2].new_root(env.state)}
+    seen_counts = {_state_cycle_key(env.state): 1}
     pane = None if args.no_render else BoardPane(cell_size=args.cell_size)
     last_action = None
 
@@ -143,7 +156,14 @@ def main() -> None:
                 show_console_board()
 
             player = env.state.current_player
-            action, probs = choose_action(mcts[player], roots[player], fns[player], args.sims)
+            action, probs = choose_action(
+                mcts[player],
+                roots[player],
+                fns[player],
+                args.sims,
+                env.state,
+                seen_counts,
+            )
             confidence = float(probs[action])
             last_action = (
                 f"P{player} {names[player]} -> {describe_action(action)} "
@@ -152,6 +172,8 @@ def main() -> None:
             if pane is not None or args.moves:
                 print(f"move {env.state.move_count:>3}: {last_action}", flush=True)
             env.step(action)
+            key = _state_cycle_key(env.state)
+            seen_counts[key] = seen_counts.get(key, 0) + 1
 
             for side in (1, 2):
                 if action in roots[side].children:
