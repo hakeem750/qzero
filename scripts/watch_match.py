@@ -10,6 +10,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import sys
 import time
@@ -80,7 +81,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--no-render", action="store_true",
-                        help="Print moves only; do not open the Tk board window.")
+                        help="Print the board in the terminal; do not open the Tk board window.")
+    parser.add_argument("--moves", action="store_true",
+                        help="Print compact move lines instead of the terminal board.")
+    parser.add_argument("--no-clear", action="store_true",
+                        help="Do not clear the terminal between board frames.")
     parser.add_argument("--cell-size", type=int, default=58)
     args = parser.parse_args()
 
@@ -120,10 +125,22 @@ def main() -> None:
     pane = None if args.no_render else BoardPane(cell_size=args.cell_size)
     last_action = None
 
+    def show_console_board() -> None:
+        if not args.no_clear:
+            os.system("cls" if os.name == "nt" else "clear")
+        print(env.render())
+        if last_action:
+            print()
+            print(last_action)
+        print()
+        print(f"candidate: {'P1' if candidate_is_p1 else 'P2'} | best: {'P2' if candidate_is_p1 else 'P1'}")
+
     try:
         while not env.is_terminal() and env.state.move_count < args.max_moves:
             if pane is not None:
                 pane.update(env, last_action)
+            elif args.no_render and not args.moves:
+                show_console_board()
 
             player = env.state.current_player
             action, probs = choose_action(mcts[player], roots[player], fns[player], args.sims)
@@ -132,7 +149,8 @@ def main() -> None:
                 f"P{player} {names[player]} -> {describe_action(action)} "
                 f"(p={confidence:.3f})"
             )
-            print(f"move {env.state.move_count:>3}: {last_action}", flush=True)
+            if pane is not None or args.moves:
+                print(f"move {env.state.move_count:>3}: {last_action}", flush=True)
             env.step(action)
 
             for side in (1, 2):
@@ -143,12 +161,16 @@ def main() -> None:
 
             if pane is not None:
                 pane.update(env, last_action)
+            elif args.no_render and not args.moves:
+                show_console_board()
             if args.delay > 0:
                 time.sleep(args.delay)
 
         winner = _adjudicated_winner(env.state)
         if pane is not None:
             pane.update(env, last_action)
+        elif args.no_render and not args.moves:
+            show_console_board()
         if winner == 0:
             print("Game over: draw")
         else:
