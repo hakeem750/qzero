@@ -222,7 +222,7 @@ class TestEncoding:
         from env.encoding import encode_state
         s = initial_state()
         obs = encode_state(s)
-        assert obs.shape == (17, 9, 9)
+        assert obs.shape == (13, 9, 9)
         assert obs.dtype == np.float32
 
     def test_mirror_preserves_shape(self):

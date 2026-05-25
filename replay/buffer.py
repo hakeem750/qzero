@@ -2,11 +2,11 @@
 Replay buffer with compressed ring-buffer storage.
 
 Storage layout (per slot):
-  obs:     uint8  (17, 9, 9)  — scaled ×255, saves 4× vs float32
+  obs:     uint8  (13, 9, 9)  — scaled ×255, saves 4× vs float32
   policy:  float16 (140,)
   value:   float16 scalar
 
-Capacity: 500,000 positions ≈ 500k × (17×81 + 140 + 1) bytes
+Capacity: 500,000 positions ≈ 500k × (13×81 + 140 + 1) bytes
   ≈ 500k × 1520 bytes ≈ 760 MB  (fits in RAM for most training rigs)
 
 IMPROVEMENT over blueprint: the buffer also stores a sample_weight
@@ -32,7 +32,7 @@ class ReplayBuffer:
         self._ptr  = 0
 
         # Pre-allocate storage
-        self._obs    = np.zeros((capacity, 17, 9, 9), dtype=np.uint8)
+        self._obs    = np.zeros((capacity, 13, 9, 9), dtype=np.uint8)
         self._policy = np.zeros((capacity, 140),     dtype=np.float16)
         self._value  = np.zeros((capacity,),          dtype=np.float16)
         # IMPROVEMENT: sample weights for PER extension
@@ -41,7 +41,7 @@ class ReplayBuffer:
     # ------------------------------------------------------------------
     def push(
         self,
-        obs:    np.ndarray,    # (17, 9, 9) float32  in [0, 1]
+        obs:    np.ndarray,    # (13, 9, 9) float32  in [0, 1]
         policy: np.ndarray,    # (140,)     float32
         value:  float,
         weight: float = 1.0,
@@ -59,7 +59,7 @@ class ReplayBuffer:
 
     def push_batch(
         self,
-        obs:    np.ndarray,    # (N, 17, 9, 9)
+        obs:    np.ndarray,    # (N, 13, 9, 9)
         policy: np.ndarray,    # (N, 140)
         value:  np.ndarray,    # (N,)
     ) -> None:
@@ -72,7 +72,7 @@ class ReplayBuffer:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Return (obs, policy, value) float32 tensors of shape
-        (B, 17, 9, 9), (B, 140), (B,).
+        (B, 13, 9, 9), (B, 140), (B,).
         """
         with self._lock:
             assert self._size >= batch_size, "Buffer too small to sample"

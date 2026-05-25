@@ -25,7 +25,7 @@ from mcts.search import MCTS
 
 @dataclass(slots=True)
 class TrajectoryStep:
-    obs: np.ndarray           # (17, 9, 9) float32
+    obs: np.ndarray           # (13, 9, 9) float32
     policy: np.ndarray        # (140,)     float32
     outcome: float            # game result from current player's view
 
@@ -184,7 +184,7 @@ class GameGenerator:
 
     Args:
         inference_fn: callable(obs_batch, mask_batch) → (policy, value)
-          obs_batch:  (B, 17, 9, 9) float32
+          obs_batch:  (B, 13, 9, 9) float32
           mask_batch: (B, 140)      bool
           policy:     (B, 140)      float32
           value:      (B, 1)        float32

@@ -72,6 +72,40 @@ def _bfs_path_exists(start: tuple[int, int], goal_row: int,
     return False
 
 
+def bfs_distance_map(start: tuple[int, int], goal_row: int,
+                     h_walls: frozenset, v_walls: frozenset) -> List[List[int]]:
+    """
+    Compute BFS distance from each cell to goal_row.
+    
+    Returns a (9,9) list of distances. Unreachable cells get 99.
+    Distances are clamped to max 16 (for normalization in encoding).
+    """
+    import numpy as np
+    dist = np.full((BOARD_SIZE, BOARD_SIZE), 99, dtype=np.int32)
+    
+    # Initialize goal row to distance 0
+    for goal_c in range(BOARD_SIZE):
+        dist[goal_row, goal_c] = 0
+    
+    visited = set((goal_row, c) for c in range(BOARD_SIZE))
+    queue = deque([(goal_row, c) for c in range(BOARD_SIZE)])
+    
+    while queue:
+        r, c = queue.popleft()
+        current_dist = dist[r, c]
+        
+        for nr, nc in ((r-1,c),(r+1,c),(r,c-1),(r,c+1)):
+            if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
+                if (nr, nc) not in visited and can_move(nr, nc, r, c, h_walls, v_walls):
+                    visited.add((nr, nc))
+                    dist[nr, nc] = min(99, current_dist + 1)
+                    queue.append((nr, nc))
+    
+    # Clamp to max 16 for normalization
+    dist = np.minimum(dist, 16)
+    return dist
+
+
 # ---------------------------------------------------------------------------
 # Wall conflict check
 # ---------------------------------------------------------------------------
