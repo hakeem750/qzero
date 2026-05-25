@@ -110,7 +110,7 @@ def save_replay_buffer(buffer: ReplayBuffer, path: pathlib.Path) -> None:
 # Requires GameGenerator to support inference_fn=None / random_policy=True.
 # If your GameGenerator doesn't support this, remove the call in main().
 # ---------------------------------------------------------------------------
-def fill_buffer_randomly(buffer: ReplayBuffer, target: int) -> None:
+def fill_buffer_randomly(buffer: ReplayBuffer, target: int, max_moves: int = 300) -> None:
     print(f"Cold-start: filling buffer with random games to {target} samples...")
     try:
         # Cold-start with random play — still use higher Dirichlet for
@@ -121,6 +121,7 @@ def fill_buffer_randomly(buffer: ReplayBuffer, target: int) -> None:
             augment=True,
             dirichlet_alpha=1.0,  # Encourages diverse action exploration
             noise_frac=0.5,       # Even though random, structure helps
+            max_moves=max_moves,
         )
         while buffer.size < target:
             steps = gen.generate()
@@ -144,6 +145,7 @@ def selfplay_worker(
     stop_event: threading.Event,
     warmup_sims: int = 100,
     min_buffer_size: int = 2_000,
+    max_moves: int = 300,
 ) -> None:
     # Warmup: stronger Dirichlet noise (higher alpha) to encourage
     # diverse exploration across moves AND walls, not just one action type
@@ -153,6 +155,7 @@ def selfplay_worker(
         dirichlet_alpha=1.0,     # Higher: more uniform exploration
         noise_frac=0.5,          # More influential noise during warmup
         augment=True,
+        max_moves=max_moves,
     )
     # Full play: still encourage diverse exploration but slightly less than warmup
     # This maintains action diversity throughout training, not just early on
@@ -162,6 +165,7 @@ def selfplay_worker(
         dirichlet_alpha=0.5,     # Better than standard (0.3), encourages diversity
         noise_frac=0.35,         # Stronger than standard (0.25) for better exploration
         augment=True,
+        max_moves=max_moves,
     )
 
     while not stop_event.is_set():
@@ -222,6 +226,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Set to 0 to disable the random cold-start fill.
     parser.add_argument("--cold_start_size", type=int,            default=1_000,
                         help="Fill this many positions with random games before starting workers. Set 0 to skip.")
+    parser.add_argument("--force_max_moves", type=int,            default=300,
+                        help="Force game length limit (default 300). Set to 400+ for longer games with wall strategy.")
     return parser
 
 
@@ -278,7 +284,7 @@ def main() -> None:
     # workers immediately start with warmup sims rather than from zero.
     cold_target = min(args.cold_start_size, args.min_buffer_size // 2)
     if cold_target > 0 and buffer.size < cold_target:
-        fill_buffer_randomly(buffer, cold_target)
+        fill_buffer_randomly(buffer, cold_target, max_moves=args.force_max_moves)
 
     cfg = TrainConfig(device=str(device), log_every=args.log_every)
     loop = TrainLoop(model, buffer, cfg)
@@ -298,7 +304,7 @@ def main() -> None:
         t = threading.Thread(
             target=selfplay_worker,
             args=(inference_fn, buffer, args.num_sims, stop_event,
-                  args.warmup_sims, args.min_buffer_size),
+                  args.warmup_sims, args.min_buffer_size, args.force_max_moves),
             daemon=True,
         )
         t.start()

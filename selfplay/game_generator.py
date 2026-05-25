@@ -200,10 +200,12 @@ class GameGenerator:
         dirichlet_alpha: float = 0.3,
         noise_frac: float = 0.25,
         augment: bool = True,           # IMPROVEMENT
+        max_moves: int = 300,           # Optional move limit for curriculum
     ) -> None:
         self.inference_fn = inference_fn or _uniform_inference
         self.num_simulations = num_simulations
         self.augment = augment
+        self.max_moves = max_moves
         self.mcts = MCTS(
             c_puct=c_puct,
             dirichlet_alpha=dirichlet_alpha,
@@ -226,7 +228,7 @@ class GameGenerator:
 
         root = self.mcts.new_root(env.state)
 
-        while not env.is_terminal():
+        while not env.is_terminal() and env.state.move_count < self.max_moves:
             move_number = env.state.move_count
             cur_player  = env.state.current_player
 
@@ -266,6 +268,7 @@ class GameGenerator:
             seen_counts[key] = seen_counts.get(key, 0) + 1
 
         game_winner = _adjudicated_winner(env.state)
+        print(f"[worker] game_winner={game_winner} len={len(raw)}")  # DIAGNOSTIC
 
         # Assign outcomes (from each player's perspective at the time)
         steps: List[TrajectoryStep] = []
