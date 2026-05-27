@@ -1,7 +1,7 @@
 import numpy as np
 
 from env.actions import NUM_ACTIONS
-from selfplay.game_generator import select_action_from_policy
+from selfplay.game_generator import GameGenerator, select_action_from_policy
 from tests.test_rules import _make_state
 
 
@@ -24,3 +24,15 @@ class TestPolicySelection:
         action = select_action_from_policy(policy, state, deterministic=True)
 
         assert action in state.legal_actions()
+
+
+def test_max_move_draw_generates_neutral_samples():
+    steps = GameGenerator(
+        inference_fn=None,
+        num_simulations=0,
+        augment=True,
+        max_moves=2,
+    ).generate()
+
+    assert len(steps) == 4
+    assert {step.outcome for step in steps} == {0.0}

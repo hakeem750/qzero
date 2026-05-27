@@ -192,15 +192,14 @@ class GameGenerator:
             env.step(action)
 
         game_winner = winner(env.state)
-        print(f"[worker] game_winner={game_winner} len={len(raw)}")  # DIAGNOSTIC
-
-        if game_winner not in (1, 2):
-            return []
 
         # Assign outcomes (from each player's perspective at the time)
         steps: List[TrajectoryStep] = []
         for obs, policy, player in raw:
-            outcome = 1.0 if game_winner == player else -1.0
+            if game_winner in (None, 0):
+                outcome = 0.0
+            else:
+                outcome = 1.0 if game_winner == player else -1.0
 
             steps.append(TrajectoryStep(obs=obs, policy=policy, outcome=outcome))
 

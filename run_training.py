@@ -139,22 +139,22 @@ def main():
             return 1
     
     # Build training command
-    train_script = pathlib.Path(__file__).parent / "train.py"
+    train_script = pathlib.Path(__file__).parent / "scripts" / "train.py"
     cmd = [
         sys.executable,
         str(train_script),
         "--device", args.device,
-        "--num-workers", str(num_workers),
-        "--num-sims", str(num_sims),
-        "--train-steps", str(train_steps),
-        "--eval-every", str(args.eval_every),
-        "--eval-games", str(args.eval_games),
+        "--num_workers", str(num_workers),
+        "--num_sims", str(num_sims),
+        "--train_steps", str(train_steps),
+        "--eval_every", str(args.eval_every),
+        "--eval_games", str(args.eval_games),
     ]
     
     if args.resume:
         cmd.append("--resume")
     if args.fresh_buffer:
-        cmd.append("--fresh-buffer")
+        cmd.append("--fresh_buffer")
     
     print("\n" + "=" * 70)
     print("STARTING TRAINING...")
