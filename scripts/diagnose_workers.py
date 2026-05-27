@@ -118,17 +118,17 @@ def test_game_generation(device_str: str = "cuda"):
         # Re-batch for MCTS
         return policy[np.newaxis], np.array([[value]])
     
-    # Create game generator
+    # Create game generator with VERY few simulations for fast test
     from selfplay.game_generator import GameGenerator
     gen = GameGenerator(
         inference_fn=inference_fn,
-        num_simulations=50,  # Quick test
+        num_simulations=5,  # Very few for quick test
         augment=False,
-        max_moves=300,
+        max_moves=50,  # Also limit moves for speed
         resign_threshold=None,
     )
     
-    print("Generating one game...")
+    print("Generating one game (5 MCTS sims, max 50 moves - quick test)...")
     t0 = time.time()
     try:
         steps = gen.generate()
