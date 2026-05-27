@@ -13,7 +13,7 @@ network:
   num_blocks:   20
   se_reduction:  4     # IMPROVEMENT: Squeeze-and-Excitation reduction ratio
   num_actions:  140
-  compile:      true   # torch.compile()
+  compile:      false  # torch.compile() is opt-in; disabled for stable self-play buffer fill
 
 # ── MCTS ───────────────────────────────────────────────────
 mcts:

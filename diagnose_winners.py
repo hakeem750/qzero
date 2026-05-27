@@ -19,7 +19,7 @@ def main():
     print(f"Device: {device}")
     
     # Build a fresh untrained model
-    model = build_net(compile_model=(device.type == "cuda"), device=device)
+    model = build_net(compile_model=False, device=device)
     
     # Start inference server
     server = InferenceServer(model, device=str(device), batch_size=1)

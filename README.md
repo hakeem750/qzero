@@ -75,6 +75,10 @@ python scripts/train.py --device cpu --num_sims 50 --num_workers 1 --train_steps
 python scripts/train.py --device cuda --num_sims 800 --num_workers 4 --train_steps 100000
 ```
 
+`torch.compile` is disabled by default during self-play training because the
+inference server uses small, variable CUDA batches while filling the replay
+buffer. Use `--compile` only for explicit comparison runs.
+
 ### Resume
 
 ```bash

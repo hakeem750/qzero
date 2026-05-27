@@ -14,6 +14,9 @@ Presets:
   --quick    : 1 worker, 50 sims, 1000 steps (test)
   --medium   : 4 workers, 200 sims, 10000 steps
   --full     : 8 workers, 800 sims, 100000 steps (default)
+
+torch.compile is disabled by default for stable multi-worker CUDA self-play.
+Use --compile only when deliberately testing compiled inference.
 """
 import os
 import sys
@@ -74,8 +77,10 @@ def main():
                         help="Resume from checkpoint")
     parser.add_argument("--fresh-buffer", action="store_true",
                         help="Start with fresh replay buffer")
+    parser.add_argument("--compile", action="store_true",
+                        help="Opt into torch.compile on CUDA. Disabled by default for stable buffer fill.")
     parser.add_argument("--no-compile", action="store_true",
-                        help="Disable torch.compile on CUDA for troubleshooting multi-worker startup stalls")
+                        help=argparse.SUPPRESS)
     
     # Training parameters (can override presets)
     parser.add_argument("--num-workers", type=int, default=None,
@@ -134,6 +139,7 @@ def main():
     print(f"  MCTS sims/move: {num_sims}")
     print(f"  Training steps: {train_steps}")
     print(f"  Evaluation every: {args.eval_every} steps ({args.eval_games} games)")
+    print(f"  torch.compile: {'enabled' if args.compile and not args.no_compile else 'disabled'}")
     
     # Run diagnostics if requested
     if args.diagnostics:
@@ -157,6 +163,8 @@ def main():
         cmd.append("--resume")
     if args.fresh_buffer:
         cmd.append("--fresh_buffer")
+    if args.compile and not args.no_compile:
+        cmd.append("--compile")
     if args.no_compile:
         cmd.append("--no_compile")
     

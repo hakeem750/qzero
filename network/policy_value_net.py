@@ -8,7 +8,7 @@ Improvements over blueprint:
   3. Policy head uses 4 filter channels instead of 2 — gives
      the policy head more representational capacity for the large
      action space (140 actions over a 9×9 board).
-  4. torch.compile() wrapper applied externally for flexibility.
+  4. torch.compile() wrapper can be applied externally for experiments.
 """
 from __future__ import annotations
 
@@ -152,11 +152,15 @@ class PolicyValueNet(nn.Module):
 
 
 def build_net(
-    compile_model: bool = True,
+    compile_model: bool = False,
     device: str | torch.device = "cpu",
     **kwargs,
 ) -> PolicyValueNet:
-    """Factory with optional torch.compile()."""
+    """Factory with optional torch.compile().
+
+    Compilation is opt-in because self-play inference uses small, variable
+    CUDA batch sizes, which can stall while compiling during buffer fill.
+    """
     net = PolicyValueNet(**kwargs).to(device)
     if compile_model and torch.cuda.is_available():
         net = torch.compile(net)

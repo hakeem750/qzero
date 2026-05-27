@@ -24,7 +24,7 @@ from mcts.search import _legal_mask
 import time
 
 
-def test_inference_server(device_str: str = "cuda"):
+def test_inference_server(device_str: str = "cuda", compile_model: bool = False):
     """Test that inference server works."""
     print("=" * 60)
     print("TEST 1: Inference Server")
@@ -34,7 +34,7 @@ def test_inference_server(device_str: str = "cuda"):
     print(f"Device: {device}")
     
     # Build and start inference server
-    model = build_net(compile_model=(device.type == "cuda"), device=device)
+    model = build_net(compile_model=(device.type == "cuda" and compile_model), device=device)
     server = InferenceServer(model, device=str(device), batch_size=32)
     server.start()
     print("✓ Inference server started")
@@ -84,7 +84,7 @@ def test_inference_server(device_str: str = "cuda"):
     return True
 
 
-def test_game_generation(device_str: str = "cuda"):
+def test_game_generation(device_str: str = "cuda", compile_model: bool = False):
     """Test that game generation works."""
     print("=" * 60)
     print("TEST 2: Single Game Generation")
@@ -93,7 +93,7 @@ def test_game_generation(device_str: str = "cuda"):
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     
     # Build model and inference function
-    model = build_net(compile_model=(device.type == "cuda"), device=device)
+    model = build_net(compile_model=(device.type == "cuda" and compile_model), device=device)
     server = InferenceServer(model, device=str(device), batch_size=32)
     server.start()
     print("✓ Inference server started")
@@ -156,12 +156,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="cuda", 
                         help="Device to use (cuda or cpu)")
+    parser.add_argument("--compile", action="store_true",
+                        help="Opt into torch.compile on CUDA for comparison testing.")
     args = parser.parse_args()
     
     try:
-        success = test_inference_server(args.device)
+        success = test_inference_server(args.device, compile_model=args.compile)
         if success:
-            success = test_game_generation(args.device)
+            success = test_game_generation(args.device, compile_model=args.compile)
         
         if success:
             print("=" * 60)
