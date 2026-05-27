@@ -39,7 +39,7 @@ def run_diagnostics(device: str):
     print("RUNNING DIAGNOSTICS...")
     print("=" * 70)
     
-    script_path = pathlib.Path(__file__).parent / "diagnose_workers.py"
+    script_path = pathlib.Path(__file__).parent / "scripts" / "diagnose_workers.py"
     result = subprocess.run(
         [sys.executable, str(script_path), "--device", device],
         capture_output=False
