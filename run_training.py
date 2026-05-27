@@ -74,6 +74,8 @@ def main():
                         help="Resume from checkpoint")
     parser.add_argument("--fresh-buffer", action="store_true",
                         help="Start with fresh replay buffer")
+    parser.add_argument("--no-compile", action="store_true",
+                        help="Disable torch.compile on CUDA for troubleshooting multi-worker startup stalls")
     
     # Training parameters (can override presets)
     parser.add_argument("--num-workers", type=int, default=None,
@@ -155,6 +157,8 @@ def main():
         cmd.append("--resume")
     if args.fresh_buffer:
         cmd.append("--fresh_buffer")
+    if args.no_compile:
+        cmd.append("--no_compile")
     
     print("\n" + "=" * 70)
     print("STARTING TRAINING...")

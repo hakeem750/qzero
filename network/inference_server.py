@@ -113,7 +113,11 @@ class InferenceServer:
                 except queue.Empty:
                     break
 
-            self._run_batch(batch)
+            try:
+                self._run_batch(batch)
+            except Exception as exc:
+                for req in batch:
+                    req.future.set_exception(exc)
 
     # ------------------------------------------------------------------
     @torch.no_grad()

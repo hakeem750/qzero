@@ -299,6 +299,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed",            type=int,            default=42)
     parser.add_argument("--device",          type=str,            default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--no_compile",      action="store_true",
+                        help="Disable torch.compile on CUDA. Useful for diagnosing multi-worker startup stalls.")
     # Raised from 2 → 8 so there are enough concurrent requests to saturate
     # the inference server and reduce per-call latency during buffer fill.
     parser.add_argument("--num_workers",     type=int,            default=8)
@@ -348,7 +350,7 @@ def main() -> None:
     device = torch.device(args.device)
     print(f"Device: {device}")
 
-    model = build_net(compile_model=(device.type == "cuda"), device=device)
+    model = build_net(compile_model=(device.type == "cuda" and not args.no_compile), device=device)
     best_model = copy.deepcopy(model)
 
     start_step = 0
