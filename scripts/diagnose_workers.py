@@ -56,7 +56,8 @@ def test_inference_server(device_str: str = "cuda"):
     
     print(f"✓ Got response in {elapsed:.3f}s")
     print(f"  Policy shape: {policy.shape}, sum: {policy.sum():.4f}")
-    print(f"  Value shape: {value.shape}, value: {value[0]:.4f}")
+    # value is a scalar from inference_server (value_np[i, 0])
+    print(f"  Value: {float(value):.4f}")
     
     # Test batched inference
     print(f"\nSending 8 batched requests...")
