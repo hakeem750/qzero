@@ -100,7 +100,9 @@ def test_game_generation(device_str: str = "cuda"):
     
     def inference_fn(obs_np, mask_np):
         """Synchronous inference wrapper."""
-        future = server.submit(obs_np[0], mask_np[0])
+        # obs_np and mask_np are already single (unbatched) observations
+        # Don't index them - pass directly to server
+        future = server.submit(obs_np, mask_np)
         policy, value = future.result(timeout=10)
         return policy[np.newaxis], np.array([[value]])
     
