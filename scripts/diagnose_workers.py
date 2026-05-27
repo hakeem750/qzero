@@ -99,11 +99,23 @@ def test_game_generation(device_str: str = "cuda"):
     print("✓ Inference server started")
     
     def inference_fn(obs_np, mask_np):
-        """Synchronous inference wrapper."""
-        # obs_np and mask_np are already single (unbatched) observations
-        # Don't index them - pass directly to server
-        future = server.submit(obs_np, mask_np)
+        """Synchronous inference wrapper.
+        
+        MCTS passes batched inputs (batch_size=1):
+          obs_np shape: (1, 20, 9, 9)
+          mask_np shape: (1, 140)
+        
+        Server expects single unbatched observations, so unbatch, infer, and re-batch.
+        """
+        # Unbatch the single observation
+        obs_single = obs_np[0]  # (20, 9, 9)
+        mask_single = mask_np[0]  # (140,)
+        
+        # Submit to server
+        future = server.submit(obs_single, mask_single)
         policy, value = future.result(timeout=10)
+        
+        # Re-batch for MCTS
         return policy[np.newaxis], np.array([[value]])
     
     # Create game generator
