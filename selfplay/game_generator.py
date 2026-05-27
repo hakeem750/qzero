@@ -143,18 +143,24 @@ class GameGenerator:
         # Raw trajectory buffer: (obs, policy, player_at_step)
         raw: List[Tuple[np.ndarray, np.ndarray, int]] = []
         root = self.mcts.new_root(env.state)
+        move_count = 0
 
         while not env.is_terminal() and env.state.move_count < self.max_moves:
             move_number = env.state.move_count
             cur_player  = env.state.current_player
 
             # MCTS search
-            self.mcts.run_simulations_sync(
-                root,
-                self.inference_fn,
-                num_simulations=self.num_simulations,
-                add_noise=True,
-            )
+            try:
+                self.mcts.run_simulations_sync(
+                    root,
+                    self.inference_fn,
+                    num_simulations=self.num_simulations,
+                    add_noise=True,
+                )
+            except Exception as e:
+                import sys
+                print(f"[MCTS error at move {move_count}] {e}", file=sys.stderr)
+                raise
 
             # Optional: check for resignation (early termination if clearly losing)
             if self.resign_threshold is not None and root.q_value < self.resign_threshold:

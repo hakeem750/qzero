@@ -178,9 +178,14 @@ def selfplay_worker(
         gen = gen_warmup if buffer.size < min_buffer_size else gen_full
         try:
             steps = gen.generate()
-            for step in steps:
-                buffer.push(step.obs, step.policy, step.outcome)
-        except Exception:
+            if steps:
+                for step in steps:
+                    buffer.push(step.obs, step.policy, step.outcome)
+            else:
+                # Empty game (e.g., immediate terminal state)
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"[worker error] {type(e).__name__}: {e}", file=sys.stderr)
             traceback.print_exc()   # full stack trace — never silent
             time.sleep(1)           # avoid a tight error loop
 
@@ -329,6 +334,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # IMPORTANT: Set CUBLAS workspace config for deterministic behavior with CUDA >= 10.2
+    import os
+    if torch.cuda.is_available() and 'CUBLAS_WORKSPACE_CONFIG' not in os.environ:
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':16:8'
+        print("✓ CUBLAS_WORKSPACE_CONFIG set to :16:8 for deterministic behavior")
+    
     args = build_arg_parser().parse_args()
 
     set_seeds(args.seed)
@@ -431,13 +442,14 @@ def main() -> None:
             proc.start()
             workers.append(proc)
     else:
-        for _ in range(args.num_workers):
+        for worker_id in range(args.num_workers):
             t = threading.Thread(
                 target=selfplay_worker,
                 args=(inference_fn, buffer, args.num_sims, stop_event,
                       args.warmup_sims, args.min_buffer_size, args.force_max_moves,
                       args.resign_threshold),
-                daemon=True,
+                daemon=False,  # Non-daemon to catch exceptions
+                name=f"selfplay-{worker_id}",
             )
             t.start()
             workers.append(t)
