@@ -4,7 +4,7 @@ project: quoridor_alpha_zero
 env:
   board_size:  9
   max_walls:  10
-  max_moves:  120      # draw condition (IMPROVEMENT: prevents infinite games)
+  max_moves:  350      # draw condition (IMPROVEMENT: prevents infinite games)
 
 # ── Network ────────────────────────────────────────────────
 network:
