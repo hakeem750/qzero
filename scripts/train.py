@@ -181,8 +181,10 @@ def selfplay_worker(
             if steps:
                 for step in steps:
                     buffer.push(step.obs, step.policy, step.outcome)
+                print(f"[worker] pushed {len(steps)} steps, buffer_size={buffer.size}")
             else:
                 # Empty game (e.g., immediate terminal state)
+                print(f"[worker] empty game generated")
                 time.sleep(0.1)
         except Exception as e:
             print(f"[worker error] {type(e).__name__}: {e}", file=sys.stderr)
@@ -373,8 +375,27 @@ def main() -> None:
     print(f"Inference server started (batch_size={inference_batch_size})")
 
     def inference_fn(obs_np, mask_np):
-        future = server.submit(obs_np[0], mask_np[0])
-        policy, value = future.result()
+        """Synchronous inference wrapper.
+        
+        MCTS passes batched inputs (batch_size=1):
+          obs_np shape: (1, 20, 9, 9)
+          mask_np shape: (1, 140)
+        
+        Server expects single unbatched observations, so unbatch, infer, and re-batch.
+        """
+        # Unbatch the single observation from MCTS
+        obs_single = obs_np[0]  # (20, 9, 9)
+        mask_single = mask_np[0]  # (140,)
+        
+        # Submit to server with timeout to detect hangs
+        future = server.submit(obs_single, mask_single)
+        try:
+            policy, value = future.result(timeout=30)
+        except Exception as e:
+            print(f"[inference error] {type(e).__name__}: {e}", file=sys.stderr)
+            raise
+        
+        # Re-batch for MCTS
         return policy[np.newaxis], np.array([[value]])
 
     resume_buffer = not args.fresh_buffer
