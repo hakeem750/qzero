@@ -28,7 +28,7 @@ class QuoridorEnv:
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
         self._rng = np.random.default_rng(seed)
         self.state = initial_state()
-        return encode_state(self.state)
+        return encode_state(self.state.canonical())
 
     # ------------------------------------------------------------------
     def step(self, action: int):
@@ -40,7 +40,7 @@ class QuoridorEnv:
         assert action in self.legal_actions(), f"Illegal action {action_name(action)}"
 
         self.state = apply_action(self.state, action)
-        obs = encode_state(self.state)
+        obs = encode_state(self.state.canonical())
 
         w = winner(self.state)
         terminated = w is not None
@@ -71,7 +71,7 @@ class QuoridorEnv:
         return winner(self.state)
 
     def encode(self) -> np.ndarray:
-        return encode_state(self.state)
+        return encode_state(self.state.canonical())
 
     def clone(self) -> "QuoridorEnv":
         env = QuoridorEnv.__new__(QuoridorEnv)

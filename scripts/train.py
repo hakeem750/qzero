@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import multiprocessing as mp
 import pathlib
+import queue
 import sys
 import threading
 import time
@@ -18,6 +20,7 @@ import traceback
 
 import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
@@ -146,6 +149,7 @@ def selfplay_worker(
     warmup_sims: int = 100,
     min_buffer_size: int = 2_000,
     max_moves: int = 300,
+    resign_threshold: float | None = None,
 ) -> None:
     # Warmup: stronger Dirichlet noise (higher alpha) to encourage
     # diverse exploration across moves AND walls, not just one action type
@@ -156,6 +160,7 @@ def selfplay_worker(
         noise_frac=0.5,          # More influential noise during warmup
         augment=True,
         max_moves=max_moves,
+        resign_threshold=resign_threshold,
     )
     # Full play: still encourage diverse exploration but slightly less than warmup
     # This maintains action diversity throughout training, not just early on
@@ -166,6 +171,7 @@ def selfplay_worker(
         noise_frac=0.35,         # Stronger than standard (0.25) for better exploration
         augment=True,
         max_moves=max_moves,
+        resign_threshold=resign_threshold,
     )
 
     while not stop_event.is_set():
@@ -177,6 +183,92 @@ def selfplay_worker(
         except Exception:
             traceback.print_exc()   # full stack trace — never silent
             time.sleep(1)           # avoid a tight error loop
+
+def process_selfplay_worker(
+    worker_id: int,
+    request_queue: mp.Queue,
+    response_queue: mp.Queue,
+    sample_queue: mp.Queue,
+    buffer_size: mp.Value,
+    num_simulations: int,
+    stop_event: mp.Event,
+    warmup_sims: int = 100,
+    min_buffer_size: int = 2_000,
+    max_moves: int = 300,
+    resign_threshold: float | None = None,
+) -> None:
+    """Self-play worker for the optional multiprocessing backend."""
+
+    def inference_fn(obs_np, mask_np):
+        request_queue.put((worker_id, obs_np[0], mask_np[0]))
+        while not stop_event.is_set():
+            try:
+                policy, value = response_queue.get(timeout=0.5)
+                return policy[np.newaxis], np.array([[value]])
+            except queue.Empty:
+                continue
+        raise RuntimeError("self-play process stopped during inference")
+
+    gen_warmup = GameGenerator(
+        inference_fn=inference_fn,
+        num_simulations=warmup_sims,
+        dirichlet_alpha=1.0,
+        noise_frac=0.5,
+        augment=True,
+        max_moves=max_moves,
+    )
+    gen_full = GameGenerator(
+        inference_fn=inference_fn,
+        num_simulations=num_simulations,
+        dirichlet_alpha=0.5,
+        noise_frac=0.35,
+        augment=True,
+        max_moves=max_moves,
+    )
+
+    while not stop_event.is_set():
+        gen = gen_warmup if buffer_size.value < min_buffer_size else gen_full
+        try:
+            for step in gen.generate():
+                sample_queue.put((step.obs, step.policy, step.outcome))
+        except Exception:
+            traceback.print_exc()
+            time.sleep(1)
+
+
+def inference_dispatcher(
+    request_queue: mp.Queue,
+    response_queues: list[mp.Queue],
+    server: InferenceServer,
+    stop_event,
+) -> None:
+    """Route inference requests from self-play processes to the batched server."""
+    while not stop_event.is_set():
+        try:
+            worker_id, obs, mask = request_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+
+        future = server.submit(obs, mask)
+
+        def deliver(done_future, dst=response_queues[worker_id]):
+            dst.put(done_future.result())
+
+        future.add_done_callback(deliver)
+
+
+def drain_sample_queue(sample_queue: mp.Queue | None, buffer: ReplayBuffer, limit: int = 10_000) -> int:
+    if sample_queue is None:
+        return 0
+    drained = 0
+    while drained < limit:
+        try:
+            obs, policy, outcome = sample_queue.get_nowait()
+        except queue.Empty:
+            break
+        buffer.push(obs, policy, outcome)
+        drained += 1
+    return drained
 
 
 def print_training_status(metrics: dict, buffer: ReplayBuffer, elapsed: float) -> None:
@@ -203,6 +295,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Raised from 2 → 8 so there are enough concurrent requests to saturate
     # the inference server and reduce per-call latency during buffer fill.
     parser.add_argument("--num_workers",     type=int,            default=8)
+    parser.add_argument("--worker_backend",  choices=["thread", "process"], default="thread",
+                        help="Self-play worker backend. Use process for multiprocess self-play.")
     parser.add_argument("--num_sims",        type=int,            default=200)
     # Cheap sims used only until min_buffer_size is reached (~10× faster fill).
     parser.add_argument("--warmup_sims",     type=int,            default=20)
@@ -222,12 +316,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume_buffer",   action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--fresh_buffer",    action="store_true", help="Start with an empty replay buffer instead of loading the saved one.")
     parser.add_argument("--save_buffer_every", type=int,          default=1_000)
+    parser.add_argument("--log_dir",          type=pathlib.Path,  default=pathlib.Path("runs"))
     parser.add_argument("--min_buffer_size", type=int,            default=2_000)
     # Set to 0 to disable the random cold-start fill.
-    parser.add_argument("--cold_start_size", type=int,            default=1_000,
-                        help="Fill this many positions with random games before starting workers. Set 0 to skip.")
+    parser.add_argument("--cold_start_size", type=int,            default=0,
+                        help="Optional non-AlphaZero random cold start size. Default 0 keeps training pure self-play.")
     parser.add_argument("--force_max_moves", type=int,            default=300,
                         help="Force game length limit (default 300). Set to 400+ for longer games with wall strategy.")
+    parser.add_argument("--resign_threshold", type=float,         default=None,
+                        help="Optional: resign if MCTS value drops below this threshold (e.g. -0.9). Default None disables.")
     return parser
 
 
@@ -271,8 +368,13 @@ def main() -> None:
 
     resume_buffer = not args.fresh_buffer
     if resume_buffer and args.buffer_path.exists():
-        buffer = ReplayBuffer.load(args.buffer_path, capacity=500_000)
-        print(f"Loaded replay buffer from {args.buffer_path} ({buffer.size} samples)")
+        try:
+            buffer = ReplayBuffer.load(args.buffer_path, capacity=500_000)
+            print(f"Loaded replay buffer from {args.buffer_path} ({buffer.size} samples)")
+        except ValueError as exc:
+            print(f"Could not load replay buffer: {exc}")
+            print("Starting with a fresh replay buffer.")
+            buffer = ReplayBuffer(capacity=500_000)
     else:
         buffer = ReplayBuffer(capacity=500_000)
         if resume_buffer:
@@ -297,21 +399,51 @@ def main() -> None:
         max_moves=args.eval_max_moves,
         device=str(device),
     )
+    writer = SummaryWriter(log_dir=str(args.log_dir))
 
+    process_sample_queue = None
+    process_buffer_size = None
+    dispatcher_thread = None
     stop_event = threading.Event()
     workers = []
-    for _ in range(args.num_workers):
-        t = threading.Thread(
-            target=selfplay_worker,
-            args=(inference_fn, buffer, args.num_sims, stop_event,
-                  args.warmup_sims, args.min_buffer_size, args.force_max_moves),
+    if args.worker_backend == "process":
+        ctx = mp.get_context("spawn")
+        stop_event = ctx.Event()
+        request_queue = ctx.Queue(maxsize=max(4, args.num_workers * 4))
+        process_sample_queue = ctx.Queue(maxsize=20_000)
+        process_buffer_size = ctx.Value("i", buffer.size)
+        response_queues = [ctx.Queue(maxsize=4) for _ in range(args.num_workers)]
+        dispatcher_thread = threading.Thread(
+            target=inference_dispatcher,
+            args=(request_queue, response_queues, server, stop_event),
             daemon=True,
         )
-        t.start()
-        workers.append(t)
+        dispatcher_thread.start()
+        for worker_id in range(args.num_workers):
+            proc = ctx.Process(
+                target=process_selfplay_worker,
+                args=(worker_id, request_queue, response_queues[worker_id],
+                      process_sample_queue, process_buffer_size, args.num_sims,
+                      stop_event, args.warmup_sims, args.min_buffer_size,
+                      args.force_max_moves, args.resign_threshold),
+                daemon=True,
+            )
+            proc.start()
+            workers.append(proc)
+    else:
+        for _ in range(args.num_workers):
+            t = threading.Thread(
+                target=selfplay_worker,
+                args=(inference_fn, buffer, args.num_sims, stop_event,
+                      args.warmup_sims, args.min_buffer_size, args.force_max_moves,
+                      args.resign_threshold),
+                daemon=True,
+            )
+            t.start()
+            workers.append(t)
 
     print(
-        f"Started {args.num_workers} self-play workers "
+        f"Started {args.num_workers} {args.worker_backend} self-play workers "
         f"(warmup_sims={args.warmup_sims}, full_sims={args.num_sims}). "
         f"Waiting for buffer to fill to {args.min_buffer_size}..."
     )
@@ -327,6 +459,9 @@ def main() -> None:
         print("Evaluation: disabled (--eval_every=0).")
     while not buffer.is_ready(args.min_buffer_size):
         time.sleep(2)
+        drained = drain_sample_queue(process_sample_queue, buffer)
+        if process_buffer_size is not None and drained:
+            process_buffer_size.value = buffer.size
         alive = sum(t.is_alive() for t in workers)
         print(f"  Buffer: {buffer.size:>5} / {args.min_buffer_size}  workers_alive={alive}/{len(workers)}")
         if alive == 0:
@@ -343,8 +478,15 @@ def main() -> None:
             print(
                 f"  win_rate={result['win_rate']:.3f}  "
                 f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
+                f"len={result['avg_game_length']:.1f}  "
+                f"H={result['policy_entropy']:.3f}  "
+                f"v_cal={result['value_calibration_mse']:.3f}  "
+                f"elo={result['elo']:.1f}  "
                 f"promoted={result['promoted']}"
             )
+            for key, value in result.items():
+                if isinstance(value, (int, float, bool)):
+                    writer.add_scalar(f"eval/{key}", float(value), loop.step)
             if result["promoted"]:
                 best_model.load_state_dict(model.state_dict())
                 best_step = loop.step
@@ -352,6 +494,9 @@ def main() -> None:
                 print("  New best model promoted!")
 
         for _ in range(args.train_steps):
+            drained = drain_sample_queue(process_sample_queue, buffer)
+            if process_buffer_size is not None and drained:
+                process_buffer_size.value = buffer.size
             metrics = loop.train_step()
             if metrics.get("skipped"):
                 print(f"[step {loop.step:>7}] skipped non-finite loss")
@@ -359,6 +504,10 @@ def main() -> None:
 
             if (loop.step % args.log_every) == 0:
                 print_training_status(metrics, buffer, time.time() - train_t0)
+                for key, value in metrics.items():
+                    if isinstance(value, (int, float)):
+                        writer.add_scalar(f"train/{key}", value, loop.step)
+                writer.add_scalar("replay/size", buffer.size, loop.step)
 
             if (loop.step % args.ckpt_every) == 0:
                 save_checkpoint(model, loop.step)
@@ -372,8 +521,15 @@ def main() -> None:
                 print(
                     f"  win_rate={result['win_rate']:.3f}  "
                     f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
+                    f"len={result['avg_game_length']:.1f}  "
+                    f"H={result['policy_entropy']:.3f}  "
+                    f"v_cal={result['value_calibration_mse']:.3f}  "
+                    f"elo={result['elo']:.1f}  "
                     f"promoted={result['promoted']}"
                 )
+                for key, value in result.items():
+                    if isinstance(value, (int, float, bool)):
+                        writer.add_scalar(f"eval/{key}", float(value), loop.step)
                 if result["promoted"]:
                     best_model.load_state_dict(model.state_dict())
                     best_step = loop.step
@@ -385,7 +541,13 @@ def main() -> None:
         stop_event.set()
         for t in workers:
             t.join(timeout=5)
+            if args.worker_backend == "process" and t.is_alive():
+                t.terminate()
+                t.join(timeout=2)
+        if dispatcher_thread is not None:
+            dispatcher_thread.join(timeout=2)
         server.stop()
+        writer.close()
         save_checkpoint(model, loop.step)
         save_replay_buffer(buffer, args.buffer_path)
 

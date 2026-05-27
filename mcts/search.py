@@ -168,7 +168,7 @@ class MCTS:
         simulations_remaining = num_simulations
 
         if not root.expanded:
-            obs = encode_state(root.state)
+            obs = encode_state(root.state.canonical())
             mask = _legal_mask(root.state)
             policy, value = inference_fn(obs[None], mask[None])
             self.expand(root, policy[0])
@@ -188,7 +188,7 @@ class MCTS:
                 self._backup(path, value)
                 continue
 
-            obs  = encode_state(leaf.state)
+            obs  = encode_state(leaf.state.canonical())
             mask = _legal_mask(leaf.state)
             policy, value = inference_fn(obs[None], mask[None])
             self.expand(leaf, policy[0])
@@ -242,12 +242,8 @@ class MCTS:
 # ---------------------------------------------------------------------------
 
 def _legal_mask(state: QuoridorState) -> np.ndarray:
-    from env.actions import NUM_ACTIONS
-    from env.rules import legal_actions
-    mask = np.zeros(NUM_ACTIONS, dtype=bool)
-    for a in legal_actions(state):
-        mask[a] = True
-    return mask
+    from env.actions import legal_action_mask
+    return legal_action_mask(state)
 
 
 def _terminal_value(winner_id: Optional[int], to_play: int) -> float:

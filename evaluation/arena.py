@@ -166,12 +166,9 @@ import torch
 
 from env.quoridor_env import QuoridorEnv
 from env.state import MAX_MOVES
+from env.rules import winner
 from mcts.search import MCTS, _legal_mask
-from selfplay.game_generator import (
-    _adjudicated_winner,
-    _state_cycle_key,
-    select_action_with_progress,
-)
+from selfplay.game_generator import select_action_from_policy
 
 
 def _greedy_inference(model, device, dtype):
@@ -195,9 +192,9 @@ def play_game(
     num_simulations: int = 400,
     seed: int = 0,
     max_moves: int = MAX_MOVES,
-) -> int:
+) -> dict:
     """
-    Play one game. Returns winner: 1 or 2 (or 0 for draw).
+    Play one game. Returns winner plus evaluation telemetry.
     No Dirichlet noise; greedy action selection.
     """
     np.random.seed(seed)
@@ -209,7 +206,8 @@ def play_game(
 
     root_a = mcts_a.new_root(env.state)
     root_b = mcts_b.new_root(env.state)
-    seen_counts = {_state_cycle_key(env.state): 1}
+    policy_entropies = []
+    root_values = []
 
     while not env.is_terminal() and env.state.move_count < max_moves:
         cur = env.state.current_player
@@ -219,16 +217,12 @@ def play_game(
             mcts, fn, root = mcts_b, model_b_fn, root_b
 
         mcts.run_simulations_sync(root, fn, num_simulations, add_noise=False)
-        policy = mcts.action_probs(root, temperature=1.0)
-        action = select_action_with_progress(
-            policy,
-            env.state,
-            temperature=0.0,
-            seen_counts=seen_counts,
-        )
+        visit_policy = mcts.action_probs(root, temperature=1.0)
+        deterministic_policy = mcts.action_probs(root, temperature=0.0)
+        policy_entropies.append(float(-(visit_policy.clip(1e-8) * np.log(visit_policy.clip(1e-8))).sum()))
+        root_values.append((cur, float(root.q_value)))
+        action = select_action_from_policy(deterministic_policy, env.state, deterministic=True)
         env.step(action)
-        key = _state_cycle_key(env.state)
-        seen_counts[key] = seen_counts.get(key, 0) + 1
 
         # Tree reuse
         if action in root_a.children:
@@ -241,7 +235,102 @@ def play_game(
         else:
             root_b = mcts_b.new_root(env.state)
 
-    return _adjudicated_winner(env.state)
+    winner_id = winner(env.state) or 0
+    value_errors = []
+    for player, value_pred in root_values:
+        if winner_id == 0:
+            value_target = 0.0
+        else:
+            value_target = 1.0 if winner_id == player else -1.0
+        value_errors.append((value_pred - value_target) ** 2)
+
+    return {
+        "winner": winner_id,
+        "game_length": env.state.move_count,
+        "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
+        "value_calibration_mse": float(np.mean(value_errors)) if value_errors else 0.0,
+    }
+
+
+class Arena:
+    """
+    Run a promotion match between candidate and best_model.
+    Candidate is promoted if win_rate >= win_thresh.
+    """
+
+    def __init__(
+        self,
+        num_games:   int   = 100,
+        num_sims:    int   = 400,
+        win_thresh:  float = 0.55,
+        max_moves:   int   = 300,
+        device: str        = "cuda",
+    ) -> None:
+        self.num_games  = num_games
+        self.num_sims   = num_sims
+        self.win_thresh = win_thresh
+        self.max_moves  = max_moves
+        self.device     = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.dtype      = torch.bfloat16
+        self.elo        = 1000.0
+
+    def evaluate(self, candidate, best_model, progress: bool = False) -> dict:
+        """Evaluate candidate vs best_model. Returns stats and promotion decision."""
+        fn_cand = _greedy_inference(candidate,  self.device, self.dtype)
+        fn_best = _greedy_inference(best_model, self.device, self.dtype)
+
+        wins = draws = losses = 0
+        game_stats = []
+        game_lengths = []
+        policy_entropies = []
+        value_calibration_mses = []
+
+        for i in range(self.num_games):
+            if progress:
+                print(f"  game {i+1}/{self.num_games}...", end="\r")
+            a_is_p1 = (i % 2 == 0)   # alternate starting sides
+            result = play_game(fn_cand, fn_best, a_is_p1=a_is_p1,
+                               num_simulations=self.num_sims, seed=i,
+                               max_moves=self.max_moves)
+            game_stats.append(result)
+            
+            winner_id = result["winner"]
+            if winner_id == 0:
+                draws += 1
+            elif (winner_id == 1) == a_is_p1:
+                wins += 1
+            else:
+                losses += 1
+            
+            game_lengths.append(result["game_length"])
+            policy_entropies.append(result["policy_entropy"])
+            value_calibration_mses.append(result["value_calibration_mse"])
+
+        if progress:
+            print("  evaluation complete.  ")
+
+        total = wins + draws + losses
+        win_rate = (wins + 0.5 * draws) / total
+        promoted = win_rate >= self.win_thresh
+
+        # Update ELO based on win rate
+        delta_elo = 32.0 * (win_rate - 0.5)
+        self.elo += delta_elo
+
+        return {
+            "wins":     wins,
+            "draws":    draws,
+            "losses":   losses,
+            "win_rate": win_rate,
+            "promoted": promoted,
+            "avg_game_length": float(np.mean(game_lengths)) if game_lengths else 0.0,
+            "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
+            "value_calibration_mse": float(np.mean(value_calibration_mses)) if value_calibration_mses else 0.0,
+            "elo": self.elo,
+            "game_stats": game_stats,
+        }
+
+
 
 
 class Arena:
@@ -263,6 +352,7 @@ class Arena:
         self.max_moves  = max_moves
         self.device     = torch.device(device if torch.cuda.is_available() else "cpu")
         self.dtype      = torch.bfloat16
+        self.elo_tracker = EloTracker()
 
     def evaluate(self, candidate, best_model, progress: bool = False) -> dict:
         import time
@@ -271,12 +361,19 @@ class Arena:
         fn_best = _greedy_inference(best_model, self.device, self.dtype)
 
         wins = draws = losses = 0
+        game_lengths = []
+        policy_entropies = []
+        value_calibration = []
         t0 = time.time()
         for i in range(self.num_games):
             a_is_p1 = (i % 2 == 0)   # alternate starting sides
-            result = play_game(fn_cand, fn_best, a_is_p1=a_is_p1,
-                               num_simulations=self.num_sims, seed=i,
-                               max_moves=self.max_moves)
+            game = play_game(fn_cand, fn_best, a_is_p1=a_is_p1,
+                             num_simulations=self.num_sims, seed=i,
+                             max_moves=self.max_moves)
+            result = game["winner"]
+            game_lengths.append(game["game_length"])
+            policy_entropies.append(game["policy_entropy"])
+            value_calibration.append(game["value_calibration_mse"])
             if result == 0:
                 draws += 1
             elif (result == 1) == a_is_p1:
@@ -294,6 +391,7 @@ class Arena:
         total = wins + draws + losses
         win_rate = (wins + 0.5 * draws) / total
         promoted = win_rate >= self.win_thresh
+        elo = self.elo_tracker.update(win_rate)
 
         return {
             "wins":     wins,
@@ -301,6 +399,10 @@ class Arena:
             "losses":   losses,
             "win_rate": win_rate,
             "promoted": promoted,
+            "avg_game_length": float(np.mean(game_lengths)) if game_lengths else 0.0,
+            "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
+            "value_calibration_mse": float(np.mean(value_calibration)) if value_calibration else 0.0,
+            "elo": elo,
         }
 
 

@@ -2,12 +2,12 @@
 Replay buffer with compressed ring-buffer storage.
 
 Storage layout (per slot):
-  obs:     uint8  (13, 9, 9)  — scaled ×255, saves 4× vs float32
+  obs:     uint8  (20, 9, 9)  — scaled ×255, saves 4× vs float32
   policy:  float16 (140,)
   value:   float16 scalar
 
-Capacity: 500,000 positions ≈ 500k × (13×81 + 140 + 1) bytes
-  ≈ 500k × 1520 bytes ≈ 760 MB  (fits in RAM for most training rigs)
+Capacity: 500,000 positions ≈ 500k × (20×81 + 140 + 1) bytes
+  ≈ 500k × 1761 bytes ≈ 880 MB  (fits in RAM for most training rigs)
 
 IMPROVEMENT over blueprint: the buffer also stores a sample_weight
 array for easy extension to prioritized experience replay (PER).
@@ -22,6 +22,9 @@ from typing import Tuple
 
 import numpy as np
 
+OBS_CHANNELS = 20
+OBS_SHAPE = (OBS_CHANNELS, 9, 9)
+
 
 class ReplayBuffer:
 
@@ -32,7 +35,7 @@ class ReplayBuffer:
         self._ptr  = 0
 
         # Pre-allocate storage
-        self._obs    = np.zeros((capacity, 13, 9, 9), dtype=np.uint8)
+        self._obs    = np.zeros((capacity, *OBS_SHAPE), dtype=np.uint8)
         self._policy = np.zeros((capacity, 140),     dtype=np.float16)
         self._value  = np.zeros((capacity,),          dtype=np.float16)
         # IMPROVEMENT: sample weights for PER extension
@@ -41,13 +44,15 @@ class ReplayBuffer:
     # ------------------------------------------------------------------
     def push(
         self,
-        obs:    np.ndarray,    # (13, 9, 9) float32  in [0, 1]
+        obs:    np.ndarray,    # (20, 9, 9) float32  in [0, 1]
         policy: np.ndarray,    # (140,)     float32
         value:  float,
         weight: float = 1.0,
     ) -> None:
         """Insert a single transition (thread-safe)."""
         with self._lock:
+            if obs.shape != OBS_SHAPE:
+                raise ValueError(f"Expected obs shape {OBS_SHAPE}, got {obs.shape}")
             # Quantise obs to uint8 to save memory
             self._obs   [self._ptr] = (obs * 255).clip(0, 255).astype(np.uint8)
             self._policy[self._ptr] = policy.astype(np.float16)
@@ -59,7 +64,7 @@ class ReplayBuffer:
 
     def push_batch(
         self,
-        obs:    np.ndarray,    # (N, 13, 9, 9)
+        obs:    np.ndarray,    # (N, 20, 9, 9)
         policy: np.ndarray,    # (N, 140)
         value:  np.ndarray,    # (N,)
     ) -> None:
@@ -72,7 +77,7 @@ class ReplayBuffer:
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Return (obs, policy, value) float32 tensors of shape
-        (B, 13, 9, 9), (B, 140), (B,).
+        (B, 20, 9, 9), (B, 140), (B,).
         """
         with self._lock:
             assert self._size >= batch_size, "Buffer too small to sample"
@@ -127,6 +132,11 @@ class ReplayBuffer:
             saved_capacity = int(data["capacity"])
             size = int(data["size"])
             ptr = int(data["ptr"])
+            if tuple(data["obs"].shape[1:]) != OBS_SHAPE:
+                raise ValueError(
+                    f"Replay buffer at {path} has obs shape {tuple(data['obs'].shape[1:])}; "
+                    f"expected {OBS_SHAPE}. Start with --fresh_buffer."
+                )
             buffer = cls(capacity=max(capacity or saved_capacity, size))
             buffer._size = size
             buffer._ptr = ptr % buffer.capacity if buffer.capacity == saved_capacity else size % buffer.capacity

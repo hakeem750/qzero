@@ -6,7 +6,7 @@ from replay.buffer import ReplayBuffer
 def test_replay_buffer_save_load_round_trip(tmp_path):
     buffer = ReplayBuffer(capacity=8)
     for i in range(5):
-        obs = np.full((13, 9, 9), i / 10, dtype=np.float32)
+        obs = np.full((20, 9, 9), i / 10, dtype=np.float32)
         policy = np.zeros(140, dtype=np.float32)
         policy[i] = 1.0
         buffer.push(obs, policy, value=float(i - 2), weight=float(i + 1))

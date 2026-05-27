@@ -46,23 +46,23 @@ class TestPolicyValueNet:
         return PolicyValueNet(channels=64, num_blocks=2)
 
     def test_policy_shape(self, net):
-        x = torch.randn(4, 13, 9, 9)
+        x = torch.randn(4, 20, 9, 9)
         logits, value = net(x)
         assert logits.shape == (4, 140)
 
     def test_value_shape(self, net):
-        x = torch.randn(4, 13, 9, 9)
+        x = torch.randn(4, 20, 9, 9)
         _, value = net(x)
         assert value.shape == (4, 1)
 
     def test_value_in_range(self, net):
-        x = torch.randn(8, 13, 9, 9)
+        x = torch.randn(8, 20, 9, 9)
         _, value = net(x)
         assert value.min() >= -1 - 1e-4
         assert value.max() <=  1 + 1e-4
 
     def test_masked_policy_sums_to_one(self, net):
-        x = torch.randn(2, 13, 9, 9)
+        x = torch.randn(2, 20, 9, 9)
         mask = torch.zeros(2, 140, dtype=torch.bool)
         mask[:, :12] = True   # only pawn moves legal
         policy, _ = net.predict(x, mask)
@@ -71,7 +71,7 @@ class TestPolicyValueNet:
 
     def test_deterministic_forward(self, net):
         net.eval()
-        x = torch.randn(1, 13, 9, 9)
+        x = torch.randn(1, 20, 9, 9)
         with torch.no_grad():
             l1, v1 = net(x)
             l2, v2 = net(x)
@@ -80,7 +80,7 @@ class TestPolicyValueNet:
 
     def test_illegal_actions_masked(self, net):
         net.eval()
-        x = torch.randn(1, 13, 9, 9)
+        x = torch.randn(1, 20, 9, 9)
         mask = torch.zeros(1, 140, dtype=torch.bool)
         mask[0, 0] = True   # only action 0 is legal
         with torch.no_grad():

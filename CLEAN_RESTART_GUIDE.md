@@ -45,7 +45,7 @@ python scripts/train.py \
   --eval_sims 100 \
   --ckpt_every 1000 \
   --force_max_moves 400 \
-  --min_buf 8000 \
+  --min_buffer_size 8000 \
   --train_steps 500000 \
   --fresh_buffer
 ```
@@ -108,8 +108,8 @@ tail -f training_output.log | grep "step"
 1. **Buffer not growing:** Game length limit too low, or inference server bottleneck
    - Check stdout for `[worker] game_winner=X len=Y` - if `len` is tiny, max_moves limit is too small
 
-2. **All draws (z ≈ 0):** `_adjudicated_winner()` returns 0 even on wins
-   - Check `[worker]` output: should see roughly equal 1s and 2s, not all 0s
+2. **All draws / discarded games:** self-play is hitting the move cap before a real winner
+   - Check `[worker]` output: should see roughly equal 1s and 2s, not all 0/None
 
 3. **v_loss stuck at 0.001:** Value head regression bug
    - Look for NaN/Inf in loss; check buffer outcome distribution

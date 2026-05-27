@@ -18,7 +18,7 @@ import torch.nn.functional as F
 
 from .residual_block import ResidualBlock
 
-NUM_INPUT_CHANNELS = 13
+NUM_INPUT_CHANNELS = 20
 BOARD_H = BOARD_W = 9
 NUM_ACTIONS = 140
 BACKBONE_CHANNELS = 256
@@ -101,7 +101,7 @@ class PolicyValueNet(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            x: (B, 13, 9, 9) float tensor
+            x: (B, 20, 9, 9) float tensor
 
         Returns:
             policy_logits: (B, 140)  — raw logits, not softmaxed
@@ -121,7 +121,7 @@ class PolicyValueNet(nn.Module):
         Masked softmax inference for MCTS leaf evaluation.
 
         Args:
-            obs:        (B, 13, 9, 9)
+            obs:        (B, 20, 9, 9)
             legal_mask: (B, 140) bool — True for legal actions
 
         Returns:

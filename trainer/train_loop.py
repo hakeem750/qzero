@@ -29,6 +29,7 @@ from replay.buffer import ReplayBuffer
 class TrainConfig:
     batch_size:      int   = 1024
     learning_rate:   float = 3e-4
+    momentum:        float = 0.9
     weight_decay:    float = 1e-4
     warmup_steps:    int   = 1_000     # IMPROVEMENT: LR warmup
     cosine_steps:    int   = 100_000
@@ -54,9 +55,10 @@ class TrainLoop:
 
         self.model.to(self.device)
 
-        self.optimizer = torch.optim.AdamW(
+        self.optimizer = torch.optim.SGD(
             model.parameters(),
             lr=config.learning_rate,
+            momentum=config.momentum,
             weight_decay=config.weight_decay,
         )
 

@@ -9,15 +9,15 @@ from __future__ import annotations
 from collections import deque
 from typing import List
 
-from .state import QuoridorState, BOARD_SIZE, WALL_GRID
+from .state import QuoridorState, BOARD_SIZE
 from .actions import (
     NUM_ACTIONS, MOVE_DELTAS, JUMP_DELTAS, DIAG_SPEC,
-    H_WALL_OFFSET, V_WALL_OFFSET, WALL_GRID,
+    H_WALL_OFFSET, V_WALL_OFFSET,
     action_to_h_wall, action_to_v_wall,
     h_wall_to_action, v_wall_to_action,
 )
 
-
+WALL_GRID = BOARD_SIZE - 1  # anchor grid is 8×8
 # ---------------------------------------------------------------------------
 # Wall-passage helpers
 # ---------------------------------------------------------------------------
@@ -72,61 +72,33 @@ def _bfs_path_exists(start: tuple[int, int], goal_row: int,
     return False
 
 
-def bfs_distance_map(start: tuple[int, int], goal_row: int,
-                     h_walls: frozenset, v_walls: frozenset) -> List[List[int]]:
-    """
-    Compute BFS distance from each cell to goal_row.
-    
-    Returns a (9,9) list of distances. Unreachable cells get 99.
-    Distances are clamped to max 16 (for normalization in encoding).
-    """
-    import numpy as np
-    dist = np.full((BOARD_SIZE, BOARD_SIZE), 99, dtype=np.int32)
-    
-    # Initialize goal row to distance 0
-    for goal_c in range(BOARD_SIZE):
-        dist[goal_row, goal_c] = 0
-    
-    visited = set((goal_row, c) for c in range(BOARD_SIZE))
-    queue = deque([(goal_row, c) for c in range(BOARD_SIZE)])
-    
-    while queue:
-        r, c = queue.popleft()
-        current_dist = dist[r, c]
-        
-        for nr, nc in ((r-1,c),(r+1,c),(r,c-1),(r,c+1)):
-            if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
-                if (nr, nc) not in visited and can_move(nr, nc, r, c, h_walls, v_walls):
-                    visited.add((nr, nc))
-                    dist[nr, nc] = min(99, current_dist + 1)
-                    queue.append((nr, nc))
-    
-    # Clamp to max 16 for normalization
-    dist = np.minimum(dist, 16)
-    return dist
-
-
 # ---------------------------------------------------------------------------
 # Wall conflict check
 # ---------------------------------------------------------------------------
 
-def _walls_conflict(anchor: tuple[int, int], is_horiz: bool,
-                    h_walls: frozenset, v_walls: frozenset) -> bool:
-    """True if placing this wall conflicts with existing walls."""
+def _walls_conflict(anchor, is_horiz, h_walls, v_walls):
+    """
+    Quoridor rules:
+    - walls may touch
+    - walls may not overlap
+    - walls may not cross
+    """
     r, c = anchor
+
     if is_horiz:
-        # Can't place if (r, c-1) or (r, c+1) horizontal already exists
-        if (r, c - 1) in h_walls or (r, c + 1) in h_walls:
-            return True
-        # Can't cross a vertical wall at the same anchor
-        if (r, c) in v_walls:
-            return True
-    else:
-        if (r - 1, c) in v_walls or (r + 1, c) in v_walls:
-            return True
-        if (r, c) in h_walls:
-            return True
-    return False
+        return (
+            (r, c) in h_walls
+            or (r, c - 1) in h_walls
+            or (r, c + 1) in h_walls
+            or (r, c) in v_walls
+        )
+
+    return (
+        (r, c) in v_walls
+        or (r - 1, c) in v_walls
+        or (r + 1, c) in v_walls
+        or (r, c) in h_walls
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +168,8 @@ def apply_action(state: QuoridorState, action: int) -> QuoridorState:
     hw, vw = state.h_walls, state.v_walls
     p1w, p2w = state.p1_walls, state.p2_walls
     cur = state.current_player
+    if action not in legal_actions(state):
+        raise ValueError(f"Illegal action: {action}")
 
     if action < 12:
         # Pawn move

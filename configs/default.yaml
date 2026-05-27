@@ -8,7 +8,7 @@ env:
 
 # ── Network ────────────────────────────────────────────────
 network:
-  in_channels:  17
+  in_channels:  20
   channels:     256
   num_blocks:   20
   se_reduction:  4     # IMPROVEMENT: Squeeze-and-Excitation reduction ratio
@@ -30,6 +30,7 @@ mcts:
 training:
   batch_size:       1024
   learning_rate:    3e-4
+  momentum:         0.9
   weight_decay:     1e-4
   l2_reg:           1e-4
   grad_clip:        1.0

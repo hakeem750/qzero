@@ -6,7 +6,7 @@ Examples:
   python scripts/play.py --p2 random --seed 7
   python scripts/play.py --p1 random --p2 random --delay 0.2
   python scripts/play.py --p2 random --render-pane
-  python scripts/play.py --no-save-buffer
+  python scripts/play.py --save-buffer
 """
 from __future__ import annotations
 
@@ -261,12 +261,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--render-pane", action="store_true", help="Open an optional colored board window.")
-    parser.add_argument("--save-buffer", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--no-save-buffer", action="store_true", help="Do not save this played game into the replay buffer.")
+    parser.add_argument("--save-buffer", action="store_true", help="Save this played game into the replay buffer.")
+    parser.add_argument("--no-save-buffer", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--buffer-path", type=pathlib.Path, default=DEFAULT_BUFFER_PATH)
     parser.add_argument("--no-augment", action="store_true", help="Disable mirror augmentation when saving gameplay.")
     args = parser.parse_args()
-    save_buffer = not args.no_save_buffer
+    save_buffer = args.save_buffer and not args.no_save_buffer
 
     rng = random.Random(args.seed)
     env = QuoridorEnv()
@@ -286,7 +286,7 @@ def main() -> None:
             player_kind = players[player]
             action = choose_action(env, player_kind, rng)
             if save_buffer:
-                raw_steps.append((encode_state(env.state), action_policy(action), player))
+                raw_steps.append((encode_state(env.state.canonical()), action_policy(action), player))
             last_action = f"Player {player} -> {describe_action(action)}"
             print(last_action)
             _, reward, terminated, _, info = env.step(action)

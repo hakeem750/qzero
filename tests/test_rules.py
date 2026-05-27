@@ -200,11 +200,16 @@ class TestWallPlacement:
         hw = frozenset({(3, 3)})
         s = _make_state(h_walls=hw)
         acts = legal_actions(s)
-        # Adjacent h_walls at (3,2) and (3,4) would overlap
-        assert h_wall_to_action(3, 2) not in acts  # (3,2) spans cols 2,3 — conflicts
-        assert h_wall_to_action(3, 4) not in acts  # (3,4) spans cols 4,5 — no conflict with 3,3?
-        # Actually (3,4) does NOT conflict with (3,3); test the correct overlap
+        # Adjacent anchors of the same orientation overlap one wall segment.
         assert h_wall_to_action(3, 2) not in acts
+        assert h_wall_to_action(3, 4) not in acts
+
+    def test_overlapping_v_walls(self):
+        vw = frozenset({(3, 3)})
+        s = _make_state(v_walls=vw)
+        acts = legal_actions(s)
+        assert v_wall_to_action(2, 3) not in acts
+        assert v_wall_to_action(4, 3) not in acts
 
     def test_no_walls_left(self):
         s = _make_state(p1_walls=0)
@@ -222,7 +227,7 @@ class TestEncoding:
         from env.encoding import encode_state
         s = initial_state()
         obs = encode_state(s)
-        assert obs.shape == (13, 9, 9)
+        assert obs.shape == (20, 9, 9)
         assert obs.dtype == np.float32
 
     def test_mirror_preserves_shape(self):

@@ -32,7 +32,7 @@ from .policy_value_net import PolicyValueNet
 
 @dataclass
 class _InferenceRequest:
-    obs: np.ndarray          # (13, 9, 9) float32
+    obs: np.ndarray          # (20, 9, 9) float32
     legal_mask: np.ndarray   # (140,) bool
     future: Future = field(default_factory=Future)
 

@@ -67,6 +67,58 @@ class QuoridorState:
             self.move_count,
         ))
 
+    def hash(self) -> int:
+        return self.__hash__()
+
+    def legal_actions(self) -> list[int]:
+        from .rules import legal_actions
+        return legal_actions(self)
+
+    def apply_action(self, action: int) -> "QuoridorState":
+        from .rules import apply_action
+        return apply_action(self, action)
+
+    def is_terminal(self) -> bool:
+        from .rules import is_terminal
+        return is_terminal(self)
+
+    def winner(self) -> int | None:
+        from .rules import winner
+        return winner(self)
+
+    def encode(self):
+        from .encoding import encode_state
+        return encode_state(self)
+
+    def canonical(self) -> "QuoridorState":
+        """
+        Return a current-player-perspective state.
+
+        P1-to-move states are already canonical. P2-to-move states are flipped
+        vertically and players are swapped, so the active player is represented
+        as player 1 moving toward increasing row indices.
+        """
+        if self.current_player == 1:
+            return self
+
+        def flip_pos(pos: tuple[int, int]) -> tuple[int, int]:
+            r, c = pos
+            return (BOARD_SIZE - 1 - r, c)
+
+        def flip_walls(walls: frozenset[tuple[int, int]]) -> frozenset[tuple[int, int]]:
+            return frozenset((WALL_GRID - 1 - r, c) for r, c in walls)
+
+        return QuoridorState(
+            p1_pos=flip_pos(self.p2_pos),
+            p2_pos=flip_pos(self.p1_pos),
+            h_walls=flip_walls(self.h_walls),
+            v_walls=flip_walls(self.v_walls),
+            p1_walls=self.p2_walls,
+            p2_walls=self.p1_walls,
+            current_player=1,
+            move_count=self.move_count,
+        )
+
 
 # ------------------------------------------------------------------
 # Factory helpers

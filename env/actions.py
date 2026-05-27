@@ -99,3 +99,35 @@ def action_name(action: int) -> str:
         return f"h_wall({r},{c})"
     r, c = action_to_v_wall(action)
     return f"v_wall({r},{c})"
+
+
+def legal_action_mask(state) -> "np.ndarray":
+    """Return a boolean mask with True for legal actions."""
+    import numpy as np
+    from .rules import legal_actions
+
+    mask = np.zeros(NUM_ACTIONS, dtype=bool)
+    for action in legal_actions(state):
+        mask[action] = True
+    return mask
+
+
+def mask_illegal_actions(policy: "np.ndarray", state, normalize: bool = True) -> "np.ndarray":
+    """
+    Zero illegal action probabilities and optionally renormalize.
+
+    This is the numpy-side equivalent of PolicyValueNet.predict(), which masks
+    logits before softmax for neural-network inference.
+    """
+    import numpy as np
+
+    masked = np.asarray(policy, dtype=np.float64).copy()
+    legal_mask = legal_action_mask(state)
+    masked[~legal_mask] = 0.0
+    if normalize:
+        total = masked.sum(dtype=np.float64)
+        if total > 0.0:
+            masked /= total
+        elif legal_mask.any():
+            masked[legal_mask] = 1.0 / legal_mask.sum()
+    return masked
