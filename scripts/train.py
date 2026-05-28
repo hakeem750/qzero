@@ -24,6 +24,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+from env.state import MAX_MOVES
 from evaluation.arena import Arena
 from network.inference_server import InferenceServer
 from network.policy_value_net import PolicyValueNet, build_net
@@ -113,7 +114,7 @@ def save_replay_buffer(buffer: ReplayBuffer, path: pathlib.Path) -> None:
 # Requires GameGenerator to support inference_fn=None / random_policy=True.
 # If your GameGenerator doesn't support this, remove the call in main().
 # ---------------------------------------------------------------------------
-def fill_buffer_randomly(buffer: ReplayBuffer, target: int, max_moves: int = 300) -> None:
+def fill_buffer_randomly(buffer: ReplayBuffer, target: int, max_moves: int = MAX_MOVES) -> None:
     print(f"Cold-start: filling buffer with random games to {target} samples...")
     try:
         # Cold-start with random play — still use higher Dirichlet for
@@ -148,7 +149,7 @@ def selfplay_worker(
     stop_event: threading.Event,
     warmup_sims: int = 100,
     min_buffer_size: int = 2_000,
-    max_moves: int = 300,
+    max_moves: int = MAX_MOVES,
     resign_threshold: float | None = None,
 ) -> None:
     # Warmup: stronger Dirichlet noise (higher alpha) to encourage
@@ -201,7 +202,7 @@ def process_selfplay_worker(
     stop_event: mp.Event,
     warmup_sims: int = 100,
     min_buffer_size: int = 2_000,
-    max_moves: int = 300,
+    max_moves: int = MAX_MOVES,
     resign_threshold: float | None = None,
 ) -> None:
     """Self-play worker for the optional multiprocessing backend."""
@@ -317,7 +318,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Run one evaluation immediately after the buffer is ready.")
     parser.add_argument("--eval_games",      type=int,            default=4)
     parser.add_argument("--eval_sims",       type=int,            default=25)
-    parser.add_argument("--eval_max_moves",  type=int,            default=120)
+    parser.add_argument("--eval_max_moves",  type=int,            default=MAX_MOVES)
+    parser.add_argument("--eval_show",       choices=["off", "moves", "board"], default="off",
+                        help="Print evaluation matches to the console: compact moves or full boards.")
+    parser.add_argument("--eval_show_games", type=int,            default=1,
+                        help="Number of evaluation games to show when --eval_show is enabled.")
     parser.add_argument("--win_thresh",      type=float,          default=0.55)
     parser.add_argument("--ckpt_every",      type=int,            default=500)
     parser.add_argument("--log_every",       type=int,            default=100)
@@ -331,8 +336,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Set to 0 to disable the random cold-start fill.
     parser.add_argument("--cold_start_size", type=int,            default=0,
                         help="Optional non-AlphaZero random cold start size. Default 0 keeps training pure self-play.")
-    parser.add_argument("--force_max_moves", type=int,            default=300,
-                        help="Force game length limit (default 300). Set to 400+ for longer games with wall strategy.")
+    parser.add_argument("--force_max_moves", type=int,            default=MAX_MOVES,
+                        help=f"Force game length limit (default {MAX_MOVES}). Set higher for longer games with wall strategy.")
     parser.add_argument("--resign_threshold", type=float,         default=None,
                         help="Optional: resign if MCTS value drops below this threshold (e.g. -0.9). Default None disables.")
     return parser
@@ -512,11 +517,18 @@ def main() -> None:
     try:
         if args.eval_now:
             print(f"\n[step {loop.step}] Running evaluation (--eval_now)...")
-            result = arena.evaluate(model, best_model, progress=True)
+            result = arena.evaluate(
+                model,
+                best_model,
+                progress=True,
+                display=args.eval_show,
+                display_games=args.eval_show_games,
+            )
             print(
                 f"  win_rate={result['win_rate']:.3f}  "
                 f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
                 f"len={result['avg_game_length']:.1f}  "
+                f"cutoff={result.get('cutoff_rate', 0.0):.2f}  "
                 f"H={result['policy_entropy']:.3f}  "
                 f"v_cal={result['value_calibration_mse']:.3f}  "
                 f"elo={result['elo']:.1f}  "
@@ -555,11 +567,18 @@ def main() -> None:
 
             if args.eval_every > 0 and (loop.step % args.eval_every) == 0:
                 print(f"\n[step {loop.step}] Running evaluation...")
-                result = arena.evaluate(model, best_model, progress=True)
+                result = arena.evaluate(
+                    model,
+                    best_model,
+                    progress=True,
+                    display=args.eval_show,
+                    display_games=args.eval_show_games,
+                )
                 print(
                     f"  win_rate={result['win_rate']:.3f}  "
                     f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
                     f"len={result['avg_game_length']:.1f}  "
+                    f"cutoff={result.get('cutoff_rate', 0.0):.2f}  "
                     f"H={result['policy_entropy']:.3f}  "
                     f"v_cal={result['value_calibration_mse']:.3f}  "
                     f"elo={result['elo']:.1f}  "

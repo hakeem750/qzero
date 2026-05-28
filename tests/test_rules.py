@@ -6,7 +6,15 @@ import pytest
 import numpy as np
 
 from env.state import initial_state, QuoridorState, BOARD_SIZE
-from env.rules import legal_actions, apply_action, is_terminal, winner, can_move
+from env.rules import (
+    adjudicate_winner,
+    can_move,
+    legal_actions,
+    apply_action,
+    is_terminal,
+    shortest_path_length,
+    winner,
+)
 from env.actions import h_wall_to_action, v_wall_to_action, NUM_ACTIONS
 
 
@@ -171,6 +179,17 @@ class TestTerminal:
         s = _make_state(move_count=MAX_MOVES)
         assert is_terminal(s)
         assert winner(s) == 0
+
+    def test_shortest_path_length_initial_state(self):
+        s = initial_state()
+        assert shortest_path_length(s.p1_pos, BOARD_SIZE - 1, s.h_walls, s.v_walls) == 8
+        assert shortest_path_length(s.p2_pos, 0, s.h_walls, s.v_walls) == 8
+
+    def test_adjudicate_move_cap_prefers_closer_player(self):
+        from env.state import MAX_MOVES
+        s = _make_state(p1_pos=(7, 4), p2_pos=(8, 4), move_count=MAX_MOVES)
+        assert winner(s) == 0
+        assert adjudicate_winner(s) == 1
 
     def test_hash_includes_move_count(self):
         s1 = _make_state(move_count=10)

@@ -28,14 +28,14 @@ class TestCanonicalEncoding:
         """P2-to-move states are flipped."""
         state = initial_state()
         # Make a move so P2 can move
-        state = apply_action(state, 4)  # P1 moves forward
+        state = apply_action(state, 1)  # P1 moves forward
         assert state.current_player == 2
         
         canonical = state.canonical()
         assert canonical.current_player == 1
         # P2 was at (8,4), after flip should be at (0,4)
         assert canonical.p1_pos == (0, 4)
-        assert canonical.p2_pos == (8, 4)
+        assert canonical.p2_pos == (7, 4)
 
     def test_canonical_encoding_p1(self):
         """P1-to-move state encodes from their perspective."""
@@ -49,7 +49,7 @@ class TestCanonicalEncoding:
     def test_canonical_encoding_p2(self):
         """P2-to-move state encodes from their perspective (flipped board)."""
         state = initial_state()
-        state = apply_action(state, 4)  # P1 moves, now P2 to move
+        state = apply_action(state, 1)  # P1 moves, now P2 to move
         
         canonical = state.canonical()
         obs = encode_state(canonical)
@@ -63,7 +63,7 @@ class TestCanonicalEncoding:
     def test_canonical_positions_are_stable(self):
         """Canonicalizing twice yields the same result."""
         state = initial_state()
-        state = apply_action(state, 4)
+        state = apply_action(state, 1)
         
         canonical1 = state.canonical()
         canonical2 = canonical1.canonical()
@@ -125,7 +125,7 @@ class TestValueTargetAlignment:
     def test_augmentation_preserves_outcome(self):
         """Mirroring state should not change outcome sign."""
         state = initial_state()
-        state = apply_action(state, 4)
+        state = apply_action(state, 1)
         
         obs = encode_state(state.canonical())
         # Simulated policy and outcome
@@ -182,7 +182,7 @@ class TestAugmentationRemapping:
     def test_mirror_preserves_policy_normalization(self):
         """Mirroring should preserve policy normalization."""
         state = initial_state()
-        state = apply_action(state, 4)  # Make a move
+        state = apply_action(state, 1)  # Make a move
         
         obs = encode_state(state.canonical())
         
@@ -239,7 +239,7 @@ class TestAugmentationRemapping:
         """Composing canonical and mirror should work correctly."""
         # Create a P2-to-move state
         state = initial_state()
-        state = apply_action(state, 4)
+        state = apply_action(state, 1)
         assert state.current_player == 2
         
         # Get canonical view

@@ -17,7 +17,7 @@ import numpy as np
 
 from env.quoridor_env import QuoridorEnv
 from env.encoding import encode_state, mirror_state_and_policy
-from env.rules import legal_actions, winner
+from env.rules import adjudicate_winner, legal_actions, winner
 from env.state import QuoridorState
 from env.actions import NUM_ACTIONS
 from mcts.search import MCTS
@@ -144,6 +144,7 @@ class GameGenerator:
         raw: List[Tuple[np.ndarray, np.ndarray, int]] = []
         root = self.mcts.new_root(env.state)
         move_count = 0
+        game_winner: int | None = None
 
         while not env.is_terminal() and env.state.move_count < self.max_moves:
             move_number = env.state.move_count
@@ -191,7 +192,10 @@ class GameGenerator:
 
             env.step(action)
 
-        game_winner = winner(env.state)
+        if game_winner is None:
+            game_winner = winner(env.state)
+        if game_winner in (None, 0) and env.state.move_count >= self.max_moves:
+            game_winner = adjudicate_winner(env.state)
 
         # Assign outcomes (from each player's perspective at the time)
         steps: List[TrajectoryStep] = []

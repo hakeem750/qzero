@@ -93,6 +93,10 @@ def main():
                         help="Evaluation frequency (default: 2000 steps)")
     parser.add_argument("--eval-games", type=int, default=4,
                         help="Games per evaluation (default: 4)")
+    parser.add_argument("--eval-show", choices=["off", "moves", "board"], default="off",
+                        help="Print evaluation matches to the console")
+    parser.add_argument("--eval-show-games", type=int, default=1,
+                        help="Number of evaluation games to show when --eval-show is enabled")
     
     args = parser.parse_args()
     
@@ -139,6 +143,8 @@ def main():
     print(f"  MCTS sims/move: {num_sims}")
     print(f"  Training steps: {train_steps}")
     print(f"  Evaluation every: {args.eval_every} steps ({args.eval_games} games)")
+    if args.eval_show != "off":
+        print(f"  Evaluation console view: {args.eval_show} ({args.eval_show_games} game(s))")
     print(f"  torch.compile: {'enabled' if args.compile and not args.no_compile else 'disabled'}")
     
     # Run diagnostics if requested
@@ -157,6 +163,8 @@ def main():
         "--train_steps", str(train_steps),
         "--eval_every", str(args.eval_every),
         "--eval_games", str(args.eval_games),
+        "--eval_show", args.eval_show,
+        "--eval_show_games", str(args.eval_show_games),
     ]
     
     if args.resume:

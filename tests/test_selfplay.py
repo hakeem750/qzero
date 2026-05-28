@@ -36,3 +36,29 @@ def test_max_move_draw_generates_neutral_samples():
 
     assert len(steps) == 4
     assert {step.outcome for step in steps} == {0.0}
+
+
+def test_resignation_keeps_assigned_winner():
+    calls = 0
+
+    def inference_fn(obs_batch, mask_batch):
+        nonlocal calls
+        calls += 1
+        policy = mask_batch.astype(np.float64)
+        totals = policy.sum(axis=1, keepdims=True)
+        np.divide(policy, totals, out=policy, where=totals > 0)
+        value = np.zeros((obs_batch.shape[0], 1), dtype=np.float32)
+        if calls > 1:
+            value[:] = -1.0
+        return policy, value
+
+    steps = GameGenerator(
+        inference_fn=inference_fn,
+        num_simulations=1,
+        augment=False,
+        max_moves=20,
+        resign_threshold=-0.5,
+    ).generate()
+
+    assert steps
+    assert steps[0].outcome == 1.0

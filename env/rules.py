@@ -55,21 +55,31 @@ def can_move(fr: int, fc: int, tr: int, tc: int,
 # BFS path check
 # ---------------------------------------------------------------------------
 
-def _bfs_path_exists(start: tuple[int, int], goal_row: int,
-                     h_walls: frozenset, v_walls: frozenset) -> bool:
-    """Return True if there exists any path from start to goal_row."""
+def shortest_path_length(
+    start: tuple[int, int],
+    goal_row: int,
+    h_walls: frozenset,
+    v_walls: frozenset,
+) -> int | None:
+    """Return shortest path length to goal_row, or None if no path exists."""
     visited = {start}
-    queue = deque([start])
+    queue = deque([(start, 0)])
     while queue:
-        r, c = queue.popleft()
+        (r, c), distance = queue.popleft()
         if r == goal_row:
-            return True
+            return distance
         for nr, nc in ((r-1,c),(r+1,c),(r,c-1),(r,c+1)):
             if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE:
                 if (nr, nc) not in visited and can_move(r, c, nr, nc, h_walls, v_walls):
                     visited.add((nr, nc))
-                    queue.append((nr, nc))
-    return False
+                    queue.append(((nr, nc), distance + 1))
+    return None
+
+
+def _bfs_path_exists(start: tuple[int, int], goal_row: int,
+                     h_walls: frozenset, v_walls: frozenset) -> bool:
+    """Return True if there exists any path from start to goal_row."""
+    return shortest_path_length(start, goal_row, h_walls, v_walls) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -250,3 +260,39 @@ def winner(state: QuoridorState) -> int | None:
     if state.is_draw:
         return 0
     return None
+
+
+def adjudicate_winner(state: QuoridorState) -> int:
+    """
+    Resolve an artificial move-limit game by shortest path distance.
+
+    Quoridor has no natural draw condition in this implementation; draws are
+    introduced only by the training/evaluation move cap. When the cap is hit,
+    the player closer to their goal is treated as the winner. Exact ties remain
+    draws.
+    """
+    natural_winner = winner(state)
+    if natural_winner not in (None, 0):
+        return natural_winner
+
+    p1_distance = shortest_path_length(state.p1_pos, BOARD_SIZE - 1, state.h_walls, state.v_walls)
+    p2_distance = shortest_path_length(state.p2_pos, 0, state.h_walls, state.v_walls)
+
+    if p1_distance is None and p2_distance is None:
+        return 0
+    if p1_distance is None:
+        return 2
+    if p2_distance is None:
+        return 1
+    if p1_distance < p2_distance:
+        return 1
+    if p2_distance < p1_distance:
+        return 2
+
+    p1_progress = state.p1_pos[0]
+    p2_progress = BOARD_SIZE - 1 - state.p2_pos[0]
+    if p1_progress > p2_progress:
+        return 1
+    if p2_progress > p1_progress:
+        return 2
+    return 0

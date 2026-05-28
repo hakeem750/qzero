@@ -166,7 +166,8 @@ import torch
 
 from env.quoridor_env import QuoridorEnv
 from env.state import MAX_MOVES
-from env.rules import winner
+from env.rules import adjudicate_winner, winner
+from env.actions import action_name
 from mcts.search import MCTS, _legal_mask
 from selfplay.game_generator import select_action_from_policy
 
@@ -192,6 +193,8 @@ def play_game(
     num_simulations: int = 400,
     seed: int = 0,
     max_moves: int = MAX_MOVES,
+    display: str = "off",
+    game_index: int = 1,
 ) -> dict:
     """
     Play one game. Returns winner plus evaluation telemetry.
@@ -209,6 +212,14 @@ def play_game(
     policy_entropies = []
     root_values = []
 
+    def player_label(player: int) -> str:
+        model_name = "candidate" if (player == 1) == a_is_p1 else "best"
+        return f"P{player} {model_name}"
+
+    if display == "board":
+        print(f"\n  eval game {game_index}: initial position")
+        print(env.render())
+
     while not env.is_terminal() and env.state.move_count < max_moves:
         cur = env.state.current_player
         if (cur == 1) == a_is_p1:
@@ -222,7 +233,25 @@ def play_game(
         policy_entropies.append(float(-(visit_policy.clip(1e-8) * np.log(visit_policy.clip(1e-8))).sum()))
         root_values.append((cur, float(root.q_value)))
         action = select_action_from_policy(deterministic_policy, env.state, deterministic=True)
+        move_number = env.state.move_count
+        confidence = float(visit_policy[action])
+        q_value = float(root.q_value)
         env.step(action)
+
+        if display == "moves":
+            print(
+                f"    eval game {game_index} move {move_number:>3}: "
+                f"{player_label(cur)} -> {action_name(action)} "
+                f"p={confidence:.3f} q={q_value:+.3f}",
+                flush=True,
+            )
+        elif display == "board":
+            print(
+                f"\n  eval game {game_index} move {move_number}: "
+                f"{player_label(cur)} -> {action_name(action)} "
+                f"p={confidence:.3f} q={q_value:+.3f}"
+            )
+            print(env.render())
 
         # Tree reuse
         if action in root_a.children:
@@ -235,7 +264,20 @@ def play_game(
         else:
             root_b = mcts_b.new_root(env.state)
 
-    winner_id = winner(env.state) or 0
+    natural_winner = winner(env.state)
+    cutoff = natural_winner in (None, 0) and env.state.move_count >= max_moves
+    winner_id = adjudicate_winner(env.state) if cutoff else (natural_winner or 0)
+    if display != "off":
+        if winner_id == 0:
+            result_text = "draw"
+        else:
+            result_text = f"{player_label(winner_id)} wins"
+        cutoff_text = " cutoff-adjudicated" if cutoff else ""
+        print(
+            f"  eval game {game_index} result: {result_text} "
+            f"moves={env.state.move_count}{cutoff_text}",
+            flush=True,
+        )
     value_errors = []
     for player, value_pred in root_values:
         if winner_id == 0:
@@ -246,6 +288,7 @@ def play_game(
 
     return {
         "winner": winner_id,
+        "cutoff": cutoff,
         "game_length": env.state.move_count,
         "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
         "value_calibration_mse": float(np.mean(value_errors)) if value_errors else 0.0,
@@ -263,7 +306,7 @@ class Arena:
         num_games:   int   = 100,
         num_sims:    int   = 400,
         win_thresh:  float = 0.55,
-        max_moves:   int   = 300,
+        max_moves:   int   = MAX_MOVES,
         device: str        = "cuda",
     ) -> None:
         self.num_games  = num_games
@@ -274,7 +317,14 @@ class Arena:
         self.dtype      = torch.bfloat16
         self.elo        = 1000.0
 
-    def evaluate(self, candidate, best_model, progress: bool = False) -> dict:
+    def evaluate(
+        self,
+        candidate,
+        best_model,
+        progress: bool = False,
+        display: str = "off",
+        display_games: int = 1,
+    ) -> dict:
         """Evaluate candidate vs best_model. Returns stats and promotion decision."""
         fn_cand = _greedy_inference(candidate,  self.device, self.dtype)
         fn_best = _greedy_inference(best_model, self.device, self.dtype)
@@ -284,14 +334,20 @@ class Arena:
         game_lengths = []
         policy_entropies = []
         value_calibration_mses = []
+        cutoffs = []
 
         for i in range(self.num_games):
-            if progress:
+            show_display = display if i < display_games else "off"
+            if progress and show_display == "off":
                 print(f"  game {i+1}/{self.num_games}...", end="\r")
+            elif progress:
+                print(f"\n  eval game {i + 1}/{self.num_games}:")
             a_is_p1 = (i % 2 == 0)   # alternate starting sides
             result = play_game(fn_cand, fn_best, a_is_p1=a_is_p1,
                                num_simulations=self.num_sims, seed=i,
-                               max_moves=self.max_moves)
+                               max_moves=self.max_moves,
+                               display=show_display,
+                               game_index=i + 1)
             game_stats.append(result)
             
             winner_id = result["winner"]
@@ -305,6 +361,7 @@ class Arena:
             game_lengths.append(result["game_length"])
             policy_entropies.append(result["policy_entropy"])
             value_calibration_mses.append(result["value_calibration_mse"])
+            cutoffs.append(bool(result.get("cutoff", False)))
 
         if progress:
             print("  evaluation complete.  ")
@@ -326,6 +383,7 @@ class Arena:
             "avg_game_length": float(np.mean(game_lengths)) if game_lengths else 0.0,
             "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
             "value_calibration_mse": float(np.mean(value_calibration_mses)) if value_calibration_mses else 0.0,
+            "cutoff_rate": float(np.mean(cutoffs)) if cutoffs else 0.0,
             "elo": self.elo,
             "game_stats": game_stats,
         }
@@ -354,7 +412,14 @@ class Arena:
         self.dtype      = torch.bfloat16
         self.elo_tracker = EloTracker()
 
-    def evaluate(self, candidate, best_model, progress: bool = False) -> dict:
+    def evaluate(
+        self,
+        candidate,
+        best_model,
+        progress: bool = False,
+        display: str = "off",
+        display_games: int = 1,
+    ) -> dict:
         import time
 
         fn_cand = _greedy_inference(candidate,  self.device, self.dtype)
@@ -364,23 +429,30 @@ class Arena:
         game_lengths = []
         policy_entropies = []
         value_calibration = []
+        cutoffs = []
         t0 = time.time()
         for i in range(self.num_games):
+            show_display = display if i < display_games else "off"
+            if progress and show_display != "off":
+                print(f"\n  eval game {i + 1}/{self.num_games}:")
             a_is_p1 = (i % 2 == 0)   # alternate starting sides
             game = play_game(fn_cand, fn_best, a_is_p1=a_is_p1,
                              num_simulations=self.num_sims, seed=i,
-                             max_moves=self.max_moves)
+                             max_moves=self.max_moves,
+                             display=show_display,
+                             game_index=i + 1)
             result = game["winner"]
             game_lengths.append(game["game_length"])
             policy_entropies.append(game["policy_entropy"])
             value_calibration.append(game["value_calibration_mse"])
+            cutoffs.append(bool(game.get("cutoff", False)))
             if result == 0:
                 draws += 1
             elif (result == 1) == a_is_p1:
                 wins += 1
             else:
                 losses += 1
-            if progress:
+            if progress and show_display == "off":
                 elapsed = time.time() - t0
                 print(
                     f"  eval game {i + 1}/{self.num_games}: "
@@ -402,6 +474,7 @@ class Arena:
             "avg_game_length": float(np.mean(game_lengths)) if game_lengths else 0.0,
             "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
             "value_calibration_mse": float(np.mean(value_calibration)) if value_calibration else 0.0,
+            "cutoff_rate": float(np.mean(cutoffs)) if cutoffs else 0.0,
             "elo": elo,
         }
 
