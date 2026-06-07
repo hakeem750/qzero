@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+from concurrent.futures import TimeoutError as FutureTimeoutError
 
 import numpy as np
 import torch
@@ -188,6 +189,8 @@ def selfplay_worker(
                 print(f"[worker] empty game generated")
                 time.sleep(0.1)
         except Exception as e:
+            if stop_event.is_set():
+                break
             print(f"[worker error] {type(e).__name__}: {e}", file=sys.stderr)
             traceback.print_exc()   # full stack trace — never silent
             time.sleep(1)           # avoid a tight error loop
@@ -242,6 +245,8 @@ def process_selfplay_worker(
             for step in gen.generate():
                 sample_queue.put((step.obs, step.policy, step.outcome))
         except Exception:
+            if stop_event.is_set():
+                break
             traceback.print_exc()
             time.sleep(1)
 
@@ -407,11 +412,17 @@ def main() -> None:
         
         # Submit to server with timeout to detect hangs
         future = server.submit(obs_single, mask_single)
-        try:
-            policy, value = future.result(timeout=30)
-        except Exception as e:
-            print(f"[inference error] {type(e).__name__}: {e}", file=sys.stderr)
-            raise
+        while True:
+            try:
+                policy, value = future.result(timeout=0.5)
+                break
+            except FutureTimeoutError:
+                if stop_event.is_set():
+                    raise RuntimeError("self-play stopped during inference")
+            except Exception as e:
+                if not stop_event.is_set():
+                    print(f"[inference error] {type(e).__name__}: {e}", file=sys.stderr)
+                raise
         
         # Re-batch for MCTS
         return policy[np.newaxis], np.array([[value]])

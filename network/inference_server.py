@@ -86,6 +86,9 @@ class InferenceServer:
     def submit(self, obs: np.ndarray, legal_mask: np.ndarray) -> Future:
         """Non-blocking: enqueue an inference request and return a Future."""
         req = _InferenceRequest(obs=obs, legal_mask=legal_mask)
+        if not self._running:
+            req.future.set_exception(RuntimeError("inference server is stopped"))
+            return req.future
         self._queue.put(req)
         return req.future
 
