@@ -57,13 +57,37 @@ def _build_summary_writer(log_dir: pathlib.Path):
     return SummaryWriter(log_dir=str(log_dir))
 
 
+def configure_checkpoint_dir(path: pathlib.Path) -> None:
+    global CKPT_DIR, BEST_CKPT_PATH
+
+    CKPT_DIR = path
+    BEST_CKPT_PATH = CKPT_DIR / "best_model.pt"
+
+
+def checkpoint_paths() -> list[pathlib.Path]:
+    return sorted(CKPT_DIR.glob("model_step_*.pt"), key=_checkpoint_step_from_path)
+
+
 def latest_checkpoint_path() -> pathlib.Path | None:
-    ckpts = sorted(CKPT_DIR.glob("model_step_*.pt"))
+    ckpts = checkpoint_paths()
     return ckpts[-1] if ckpts else None
 
 
 def _checkpoint_step_from_path(path: pathlib.Path) -> int:
     return int(path.stem.split("_")[-1])
+
+
+def ensure_fresh_checkpoint_dir() -> None:
+    existing = checkpoint_paths()
+    if not existing:
+        return
+
+    latest = existing[-1]
+    raise RuntimeError(
+        f"Checkpoint directory {CKPT_DIR} already contains {len(existing)} "
+        f"model checkpoint(s), latest {latest}. Use --resume to continue that "
+        "run or pass --checkpoint_dir to start a separate fresh run."
+    )
 
 
 def _move_optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
@@ -410,6 +434,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ckpt_every",      type=int,            default=500)
     parser.add_argument("--log_every",       type=int,            default=100)
     parser.add_argument("--resume",          action="store_true")
+    parser.add_argument("--checkpoint_dir",  type=pathlib.Path,   default=CKPT_DIR,
+                        help="Directory for model_step_*.pt and best_model.pt.")
     parser.add_argument("--buffer_path",     type=pathlib.Path,   default=DEFAULT_BUFFER_PATH)
     parser.add_argument("--resume_buffer",   action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--fresh_buffer",    action="store_true", help="Start with an empty replay buffer instead of loading the saved one.")
@@ -434,6 +460,12 @@ def main() -> None:
         print("✓ CUBLAS_WORKSPACE_CONFIG set to :16:8 for deterministic behavior")
     
     args = build_arg_parser().parse_args()
+    configure_checkpoint_dir(args.checkpoint_dir)
+    if not args.resume:
+        try:
+            ensure_fresh_checkpoint_dir()
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
 
     set_seeds(args.seed)
     device = torch.device(args.device)
