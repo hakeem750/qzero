@@ -150,18 +150,12 @@ class GameGenerator:
             move_number = env.state.move_count
             cur_player  = env.state.current_player
 
-            # MCTS search
-            try:
-                self.mcts.run_simulations_sync(
-                    root,
-                    self.inference_fn,
-                    num_simulations=self.num_simulations,
-                    add_noise=True,
-                )
-            except Exception as e:
-                import sys
-                print(f"[MCTS error at move {move_count}] {e}", file=sys.stderr)
-                raise
+            self.mcts.run_simulations_sync(
+                root,
+                self.inference_fn,
+                num_simulations=self.num_simulations,
+                add_noise=True,
+            )
 
             # Optional: check for resignation (early termination if clearly losing)
             if self.resign_threshold is not None and root.q_value < self.resign_threshold:
