@@ -21,7 +21,6 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 
 import numpy as np
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
@@ -39,6 +38,68 @@ BEST_CKPT_PATH = CKPT_DIR / "best_model.pt"
 DEFAULT_BUFFER_PATH = pathlib.Path("data") / "replay_buffer.npz"
 
 
+class _NoopSummaryWriter:
+    def add_scalar(self, *args, **kwargs) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _build_summary_writer(log_dir: pathlib.Path):
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except ModuleNotFoundError as exc:
+        if exc.name != "tensorboard":
+            raise
+        print("TensorBoard is not installed; scalar logging disabled.")
+        return _NoopSummaryWriter()
+    return SummaryWriter(log_dir=str(log_dir))
+
+
+def latest_checkpoint_path() -> pathlib.Path | None:
+    ckpts = sorted(CKPT_DIR.glob("model_step_*.pt"))
+    return ckpts[-1] if ckpts else None
+
+
+def _checkpoint_step_from_path(path: pathlib.Path) -> int:
+    return int(path.stem.split("_")[-1])
+
+
+def _move_optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
+    for state in optimizer.state.values():
+        for key, value in list(state.items()):
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
+
+
+def _load_checkpoint_file(
+    path: pathlib.Path,
+    model: PolicyValueNet,
+    loop: TrainLoop | None = None,
+) -> int:
+    data = torch.load(path, map_location="cpu")
+    if isinstance(data, dict) and "model" in data:
+        model.load_state_dict(data["model"])
+        step = int(data.get("step", _checkpoint_step_from_path(path)))
+        if loop is not None:
+            if "optimizer" in data:
+                loop.optimizer.load_state_dict(data["optimizer"])
+                _move_optimizer_state_to_device(loop.optimizer, loop.device)
+            if "scheduler" in data:
+                loop.scheduler.load_state_dict(data["scheduler"])
+            if "scaler" in data and data["scaler"] is not None:
+                loop.scaler.load_state_dict(data["scaler"])
+            loop.step = step
+        return step
+
+    model.load_state_dict(data)
+    step = _checkpoint_step_from_path(path)
+    if loop is not None:
+        loop.step = step
+    return step
+
+
 def set_seeds(seed: int = 42) -> None:
     import random
 
@@ -50,10 +111,21 @@ def set_seeds(seed: int = 42) -> None:
     torch.use_deterministic_algorithms(True, warn_only=True)
 
 
-def save_checkpoint(model: PolicyValueNet, step: int) -> pathlib.Path:
+def save_checkpoint(model: PolicyValueNet, step: int, loop: TrainLoop | None = None) -> pathlib.Path:
     CKPT_DIR.mkdir(exist_ok=True)
     path = CKPT_DIR / f"model_step_{step:07d}.pt"
-    torch.save(model.state_dict(), path)
+    payload = {
+        "format_version": 2,
+        "step": step,
+        "model": model.state_dict(),
+    }
+    if loop is not None:
+        payload.update({
+            "optimizer": loop.optimizer.state_dict(),
+            "scheduler": loop.scheduler.state_dict(),
+            "scaler": loop.scaler.state_dict(),
+        })
+    torch.save(payload, path)
     print(f"  saved checkpoint {path}")
     return path
 
@@ -66,12 +138,11 @@ def save_best_checkpoint(model: PolicyValueNet, step: int) -> pathlib.Path:
 
 
 def load_latest_checkpoint(model: PolicyValueNet) -> int:
-    ckpts = sorted(CKPT_DIR.glob("model_step_*.pt"))
-    if not ckpts:
+    path = latest_checkpoint_path()
+    if path is None:
         return 0
-    model.load_state_dict(torch.load(ckpts[-1], map_location="cpu"))
-    step = int(ckpts[-1].stem.split("_")[-1])
-    print(f"Resumed model from {ckpts[-1]}")
+    step = _load_checkpoint_file(path, model)
+    print(f"Resumed model from {path}")
     return step
 
 
@@ -98,8 +169,7 @@ def load_previous_checkpoint(model: PolicyValueNet, before_step: int) -> int | N
     if not previous:
         return None
     path = previous[-1]
-    model.load_state_dict(torch.load(path, map_location="cpu"))
-    step = int(path.stem.split("_")[-1])
+    step = _load_checkpoint_file(path, model)
     print(f"No saved best model found; using previous checkpoint as best: {path}")
     return step
 
@@ -376,8 +446,13 @@ def main() -> None:
 
     start_step = 0
     best_step = None
+    resume_checkpoint = latest_checkpoint_path() if args.resume else None
     if args.resume:
-        start_step = load_latest_checkpoint(model)
+        if resume_checkpoint is not None:
+            start_step = _load_checkpoint_file(resume_checkpoint, model)
+            print(f"Resumed model from {resume_checkpoint}")
+        else:
+            print("No checkpoint found; starting from step 0.")
         best_step = load_best_checkpoint(best_model)
         if best_step is None:
             best_step = load_previous_checkpoint(best_model, start_step)
@@ -455,7 +530,11 @@ def main() -> None:
         batch_size=args.batch_size,
     )
     loop = TrainLoop(model, buffer, cfg)
-    loop.step = start_step
+    if resume_checkpoint is not None:
+        start_step = _load_checkpoint_file(resume_checkpoint, model, loop)
+        print(f"Resumed training state from {resume_checkpoint} (step {start_step})")
+    else:
+        loop.step = start_step
 
     arena = Arena(
         num_games=args.eval_games,
@@ -464,7 +543,7 @@ def main() -> None:
         max_moves=args.eval_max_moves,
         device=str(device),
     )
-    writer = SummaryWriter(log_dir=str(args.log_dir))
+    writer = _build_summary_writer(args.log_dir)
 
     process_sample_queue = None
     process_buffer_size = None
@@ -586,7 +665,7 @@ def main() -> None:
                 writer.add_scalar("replay/size", buffer.size, loop.step)
 
             if (loop.step % args.ckpt_every) == 0:
-                save_checkpoint(model, loop.step)
+                save_checkpoint(model, loop.step, loop)
 
             if args.save_buffer_every > 0 and (loop.step % args.save_buffer_every) == 0:
                 save_replay_buffer(buffer, args.buffer_path)
@@ -631,7 +710,7 @@ def main() -> None:
             dispatcher_thread.join(timeout=2)
         server.stop()
         writer.close()
-        save_checkpoint(model, loop.step)
+        save_checkpoint(model, loop.step, loop)
         save_replay_buffer(buffer, args.buffer_path)
 
     print("Training complete.")
