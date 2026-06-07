@@ -65,6 +65,21 @@ def test_fresh_checkpoint_dir_rejects_existing_model_checkpoints(tmp_path, monke
         train_script.ensure_fresh_checkpoint_dir()
 
 
+def test_fresh_checkpoint_dir_rejects_existing_best_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(train_script, "CKPT_DIR", tmp_path)
+    monkeypatch.setattr(train_script, "BEST_CKPT_PATH", tmp_path / "best_model.pt")
+    (tmp_path / "best_model.pt").touch()
+
+    with pytest.raises(RuntimeError, match="best_model.pt"):
+        train_script.ensure_fresh_checkpoint_dir()
+
+
+def test_warns_when_resumed_model_has_step_zero_best(capsys):
+    train_script.warn_if_best_checkpoint_lags(start_step=133000, best_step=0)
+
+    assert "best_model.pt is step 0" in capsys.readouterr().out
+
+
 def test_checkpoint_round_trip_restores_training_state(tmp_path, monkeypatch):
     monkeypatch.setattr(train_script, "CKPT_DIR", tmp_path)
     buffer = _filled_buffer()

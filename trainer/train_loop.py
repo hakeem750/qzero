@@ -30,7 +30,7 @@ class TrainConfig:
     batch_size:      int   = 1024
     learning_rate:   float = 3e-4
     momentum:        float = 0.9
-    weight_decay:    float = 1e-4
+    weight_decay:    float = 0.0
     warmup_steps:    int   = 1_000     # IMPROVEMENT: LR warmup
     cosine_steps:    int   = 100_000
     grad_clip:       float = 1.0
@@ -76,6 +76,18 @@ class TrainLoop:
         self.metrics_history: List[Dict] = []
 
     # ------------------------------------------------------------------
+    def _l2_penalty(self) -> torch.Tensor:
+        """Regularize trainable kernels only, excluding bias and BatchNorm params."""
+        terms = [
+            param.pow(2).sum()
+            for param in self.model.parameters()
+            if param.requires_grad and param.ndim > 1
+        ]
+        if not terms:
+            return torch.zeros((), device=self.device)
+        return self.cfg.l2_reg * torch.stack(terms).sum()
+
+    # ------------------------------------------------------------------
     def train_step(self) -> Dict[str, float]:
         obs_np, policy_np, value_np = self.buffer.sample(self.cfg.batch_size)
 
@@ -96,11 +108,9 @@ class TrainLoop:
             value_loss = F.mse_loss(v_pred.squeeze(-1), value)
             loss_no_l2 = policy_loss + value_loss
 
-            # L2 regularisation (weight decay in AdamW also does this,
-            # but explicit reg makes the ablation clear)
-            l2 = self.cfg.l2_reg * sum(
-                p.pow(2).sum() for p in self.model.parameters() if p.requires_grad
-            )
+            # Explicit L2 regularisation. Optimizer weight_decay defaults to
+            # zero so the default training objective does not double-count it.
+            l2 = self._l2_penalty()
 
             loss = loss_no_l2 + l2
 

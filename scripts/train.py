@@ -79,14 +79,15 @@ def _checkpoint_step_from_path(path: pathlib.Path) -> int:
 
 def ensure_fresh_checkpoint_dir() -> None:
     existing = checkpoint_paths()
-    if not existing:
+    has_best = BEST_CKPT_PATH.exists()
+    if not existing and not has_best:
         return
 
-    latest = existing[-1]
+    latest = existing[-1] if existing else BEST_CKPT_PATH
     raise RuntimeError(
         f"Checkpoint directory {CKPT_DIR} already contains {len(existing)} "
-        f"model checkpoint(s), latest {latest}. Use --resume to continue that "
-        "run or pass --checkpoint_dir to start a separate fresh run."
+        f"model checkpoint(s){' and best_model.pt' if has_best else ''}, latest {latest}. "
+        "Use --resume to continue that run or pass --checkpoint_dir to start a separate fresh run."
     )
 
 
@@ -184,8 +185,18 @@ def load_best_checkpoint(model: PolicyValueNet) -> int | None:
     return step
 
 
+def warn_if_best_checkpoint_lags(start_step: int, best_step: int | None) -> None:
+    if best_step == 0 and start_step > 0:
+        print(
+            f"WARNING: resumed model is at step {start_step}, but "
+            f"{BEST_CKPT_PATH} is step 0. This is valid only if no model has "
+            "ever been promoted; otherwise restore the intended best_model.pt "
+            "before running evaluation."
+        )
+
+
 def load_previous_checkpoint(model: PolicyValueNet, before_step: int) -> int | None:
-    ckpts = sorted(CKPT_DIR.glob("model_step_*.pt"))
+    ckpts = checkpoint_paths()
     previous = [
         path for path in ckpts
         if int(path.stem.split("_")[-1]) < before_step
@@ -209,7 +220,12 @@ def save_replay_buffer(buffer: ReplayBuffer, path: pathlib.Path) -> None:
 # Requires GameGenerator to support inference_fn=None / random_policy=True.
 # If your GameGenerator doesn't support this, remove the call in main().
 # ---------------------------------------------------------------------------
-def fill_buffer_randomly(buffer: ReplayBuffer, target: int, max_moves: int = MAX_MOVES) -> None:
+def fill_buffer_randomly(
+    buffer: ReplayBuffer,
+    target: int,
+    max_moves: int = MAX_MOVES,
+    rng: np.random.Generator | None = None,
+) -> None:
     print(f"Cold-start: filling buffer with random games to {target} samples...")
     try:
         # Cold-start with random play — still use higher Dirichlet for
@@ -221,6 +237,7 @@ def fill_buffer_randomly(buffer: ReplayBuffer, target: int, max_moves: int = MAX
             dirichlet_alpha=1.0,  # Encourages diverse action exploration
             noise_frac=0.5,       # Even though random, structure helps
             max_moves=max_moves,
+            rng=rng,
         )
         while buffer.size < target:
             steps = gen.generate()
@@ -246,7 +263,9 @@ def selfplay_worker(
     min_buffer_size: int = 2_000,
     max_moves: int = MAX_MOVES,
     resign_threshold: float | None = None,
+    seed: int | None = None,
 ) -> None:
+    rng = np.random.default_rng(seed)
     # Warmup: stronger Dirichlet noise (higher alpha) to encourage
     # diverse exploration across moves AND walls, not just one action type
     gen_warmup = GameGenerator(
@@ -257,6 +276,7 @@ def selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        rng=rng,
     )
     # Full play: still encourage diverse exploration but slightly less than warmup
     # This maintains action diversity throughout training, not just early on
@@ -268,6 +288,7 @@ def selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        rng=rng,
     )
 
     while not stop_event.is_set():
@@ -301,8 +322,10 @@ def process_selfplay_worker(
     min_buffer_size: int = 2_000,
     max_moves: int = MAX_MOVES,
     resign_threshold: float | None = None,
+    seed: int | None = None,
 ) -> None:
     """Self-play worker for the optional multiprocessing backend."""
+    rng = np.random.default_rng(seed)
 
     def inference_fn(obs_np, mask_np):
         request_queue.put((worker_id, obs_np[0], mask_np[0]))
@@ -322,6 +345,7 @@ def process_selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        rng=rng,
     )
     gen_full = GameGenerator(
         inference_fn=inference_fn,
@@ -331,6 +355,7 @@ def process_selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        rng=rng,
     )
 
     while not stop_event.is_set():
@@ -493,6 +518,7 @@ def main() -> None:
             best_step = start_step
             save_best_checkpoint(best_model, best_step)
             print("Initialized best model from the current checkpoint.")
+        warn_if_best_checkpoint_lags(start_step, best_step)
     else:
         best_step = 0
         save_best_checkpoint(best_model, best_step)
@@ -554,7 +580,12 @@ def main() -> None:
     # workers immediately start with warmup sims rather than from zero.
     cold_target = min(args.cold_start_size, args.min_buffer_size // 2)
     if cold_target > 0 and buffer.size < cold_target:
-        fill_buffer_randomly(buffer, cold_target, max_moves=args.force_max_moves)
+        fill_buffer_randomly(
+            buffer,
+            cold_target,
+            max_moves=args.force_max_moves,
+            rng=np.random.default_rng(args.seed + 10_000),
+        )
 
     cfg = TrainConfig(
         device=str(device),
@@ -601,7 +632,8 @@ def main() -> None:
                 args=(worker_id, request_queue, response_queues[worker_id],
                       process_sample_queue, process_buffer_size, args.num_sims,
                       stop_event, args.warmup_sims, args.min_buffer_size,
-                      args.force_max_moves, args.resign_threshold),
+                      args.force_max_moves, args.resign_threshold,
+                      args.seed + worker_id),
                 daemon=True,
             )
             proc.start()
@@ -612,7 +644,7 @@ def main() -> None:
                 target=selfplay_worker,
                 args=(inference_fn, buffer, args.num_sims, stop_event,
                       args.warmup_sims, args.min_buffer_size, args.force_max_moves,
-                      args.resign_threshold),
+                      args.resign_threshold, args.seed + worker_id),
                 daemon=False,  # Non-daemon to catch exceptions
                 name=f"selfplay-{worker_id}",
             )

@@ -26,12 +26,13 @@ class TestPolicySelection:
         assert action in state.legal_actions()
 
 
-def test_max_move_draw_generates_neutral_samples():
+def test_max_move_cutoff_generates_adjudicated_samples():
     steps = GameGenerator(
         inference_fn=None,
         num_simulations=0,
         augment=True,
         max_moves=2,
+        rng=np.random.default_rng(1),
     ).generate()
 
     assert len(steps) == 4

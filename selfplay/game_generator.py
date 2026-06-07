@@ -76,6 +76,7 @@ def select_action_from_policy(
     policy: np.ndarray,
     state: QuoridorState,
     deterministic: bool = False,
+    rng: np.random.Generator | None = None,
 ) -> int:
     """Select a legal action directly from the MCTS visit distribution."""
     actions = legal_actions(state)
@@ -87,7 +88,8 @@ def select_action_from_policy(
     probs = _safe_sample_policy(probs, state)
     if deterministic:
         return int(max(actions, key=lambda action: probs[action]))
-    return int(np.random.choice(NUM_ACTIONS, p=probs))
+    chooser = rng.choice if rng is not None else np.random.choice
+    return int(chooser(NUM_ACTIONS, p=probs))
 
 
 class GameGenerator:
@@ -118,12 +120,14 @@ class GameGenerator:
         augment: bool = True,           # IMPROVEMENT
         max_moves: int = 300,           # Optional move limit for curriculum
         resign_threshold: float | None = None,  # Optional: resign if value drops below threshold
+        rng: np.random.Generator | None = None,
     ) -> None:
         self.inference_fn = inference_fn or _uniform_inference
         self.num_simulations = num_simulations
         self.augment = augment
         self.max_moves = max_moves
         self.resign_threshold = resign_threshold
+        self.rng = rng or np.random.default_rng()
         self.mcts = MCTS(
             c_puct=c_puct,
             dirichlet_alpha=dirichlet_alpha,
@@ -155,6 +159,7 @@ class GameGenerator:
                 self.inference_fn,
                 num_simulations=self.num_simulations,
                 add_noise=True,
+                rng=self.rng,
             )
 
             # Optional: check for resignation (early termination if clearly losing)
@@ -172,7 +177,7 @@ class GameGenerator:
             obs = encode_state(env.state.canonical())
             raw.append((obs, policy_to_canonical(policy, env.state), cur_player))
 
-            action = select_action_from_policy(policy, env.state)
+            action = select_action_from_policy(policy, env.state, rng=self.rng)
 
             # Tree reuse: advance root
             if action in root.children:

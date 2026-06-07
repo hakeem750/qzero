@@ -148,11 +148,18 @@ class MCTS:
     # High-level API
     # ------------------------------------------------------------------
 
-    def add_dirichlet_noise(self, root: Node) -> None:
+    def add_dirichlet_noise(
+        self,
+        root: Node,
+        rng: np.random.Generator | None = None,
+    ) -> None:
         if not root.children:
             return
         actions = list(root.children.keys())
-        noise = np.random.dirichlet([self.dirichlet_alpha] * len(actions))
+        if rng is None:
+            noise = np.random.dirichlet([self.dirichlet_alpha] * len(actions))
+        else:
+            noise = rng.dirichlet([self.dirichlet_alpha] * len(actions))
         for a, n in zip(actions, noise):
             child = root.children[a]
             # Ensure prior stays positive after noise mixing
@@ -165,6 +172,7 @@ class MCTS:
         inference_fn,      # callable(obs, mask) → (policy, value) arrays
         num_simulations: int,
         add_noise: bool = True,
+        rng: np.random.Generator | None = None,
     ) -> None:
         """
         Synchronous (single-threaded) MCTS for evaluation and testing.
@@ -176,7 +184,7 @@ class MCTS:
             policy, value = _evaluate_state(root.state, inference_fn)
             self.expand(root, policy)
             if add_noise:
-                self.add_dirichlet_noise(root)
+                self.add_dirichlet_noise(root, rng=rng)
             if num_simulations <= 0:
                 return
             root.backup(value)
