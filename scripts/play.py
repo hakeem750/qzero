@@ -27,6 +27,7 @@ from env.actions import (
     action_to_h_wall,
     action_to_v_wall,
     h_wall_to_action,
+    policy_to_canonical,
     v_wall_to_action,
 )
 from env.quoridor_env import QuoridorEnv
@@ -286,7 +287,8 @@ def main() -> None:
             player_kind = players[player]
             action = choose_action(env, player_kind, rng)
             if save_buffer:
-                raw_steps.append((encode_state(env.state.canonical()), action_policy(action), player))
+                policy = policy_to_canonical(action_policy(action), env.state)
+                raw_steps.append((encode_state(env.state.canonical()), policy, player))
             last_action = f"Player {player} -> {describe_action(action)}"
             print(last_action)
             _, reward, terminated, _, info = env.step(action)

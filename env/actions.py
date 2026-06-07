@@ -55,6 +55,12 @@ DIAG_SPEC = {
     11: (1, 2),   # primary south(1), side east(2)
 }
 
+VERTICAL_ACTION_FLIP = {
+    0: 1, 1: 0, 2: 2, 3: 3,
+    4: 5, 5: 4, 6: 6, 7: 7,
+    8: 10, 9: 11, 10: 8, 11: 9,
+}
+
 
 def action_is_wall(action: int) -> bool:
     return action >= H_WALL_OFFSET
@@ -101,6 +107,53 @@ def action_name(action: int) -> str:
     return f"v_wall({r},{c})"
 
 
+def flip_action_vertical(action: int) -> int:
+    """Map an action through the same vertical flip used for P2 canonical states."""
+    if action < NUM_MOVE_ACTIONS:
+        return VERTICAL_ACTION_FLIP[action]
+    if action_is_h_wall(action):
+        r, c = action_to_h_wall(action)
+        return h_wall_to_action(WALL_GRID - 1 - r, c)
+    r, c = action_to_v_wall(action)
+    return v_wall_to_action(WALL_GRID - 1 - r, c)
+
+
+def action_to_canonical(action: int, state) -> int:
+    """Convert a real-board action into the network's current-player action space."""
+    return flip_action_vertical(action) if state.current_player == 2 else action
+
+
+def action_from_canonical(action: int, state) -> int:
+    """Convert a network/canonical action back to a real-board action."""
+    return flip_action_vertical(action) if state.current_player == 2 else action
+
+
+def policy_to_canonical(policy: "np.ndarray", state) -> "np.ndarray":
+    """Convert a real-board policy vector to current-player canonical labels."""
+    import numpy as np
+
+    policy = np.asarray(policy)
+    if state.current_player == 1:
+        return policy.copy()
+    mapped = np.zeros_like(policy)
+    for action in range(NUM_ACTIONS):
+        mapped[flip_action_vertical(action)] = policy[action]
+    return mapped
+
+
+def policy_from_canonical(policy: "np.ndarray", state) -> "np.ndarray":
+    """Convert a current-player canonical policy vector to real-board labels."""
+    import numpy as np
+
+    policy = np.asarray(policy)
+    if state.current_player == 1:
+        return policy.copy()
+    mapped = np.zeros_like(policy)
+    for action in range(NUM_ACTIONS):
+        mapped[flip_action_vertical(action)] = policy[action]
+    return mapped
+
+
 def legal_action_mask(state) -> "np.ndarray":
     """Return a boolean mask with True for legal actions."""
     import numpy as np
@@ -109,6 +162,17 @@ def legal_action_mask(state) -> "np.ndarray":
     mask = np.zeros(NUM_ACTIONS, dtype=bool)
     for action in legal_actions(state):
         mask[action] = True
+    return mask
+
+
+def canonical_legal_action_mask(state) -> "np.ndarray":
+    """Return legal actions in the network's current-player canonical action space."""
+    import numpy as np
+    from .rules import legal_actions
+
+    mask = np.zeros(NUM_ACTIONS, dtype=bool)
+    for action in legal_actions(state):
+        mask[action_to_canonical(action, state)] = True
     return mask
 
 

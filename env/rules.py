@@ -172,13 +172,13 @@ def legal_actions(state: QuoridorState) -> List[int]:
 # Apply action → next state
 # ---------------------------------------------------------------------------
 
-def apply_action(state: QuoridorState, action: int) -> QuoridorState:
+def apply_action(state: QuoridorState, action: int, validate: bool = True) -> QuoridorState:
     """Return the state resulting from applying action. Pure function."""
     p1, p2 = state.p1_pos, state.p2_pos
     hw, vw = state.h_walls, state.v_walls
     p1w, p2w = state.p1_walls, state.p2_walls
     cur = state.current_player
-    if action not in legal_actions(state):
+    if validate and action not in legal_actions(state):
         raise ValueError(f"Illegal action: {action}")
 
     if action < 12:

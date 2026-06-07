@@ -21,6 +21,7 @@ import numpy as np
 from env.state import QuoridorState
 from env.rules import legal_actions, apply_action, is_terminal, winner
 from env.encoding import encode_state
+from env.actions import canonical_legal_action_mask, policy_from_canonical
 from .node import Node
 
 
@@ -40,14 +41,16 @@ class MCTS:
         noise_frac: float = 0.25,
         virtual_loss: int = 3,          # IMPROVEMENT
         max_tree_size: int = 200_000,   # guard against memory blowup
+        use_transpositions: bool = False,
     ) -> None:
         self.c_puct = c_puct
         self.dirichlet_alpha = dirichlet_alpha
         self.noise_frac = noise_frac
         self.vl = virtual_loss
         self.max_tree_size = max_tree_size
+        self.use_transpositions = use_transpositions
 
-        # IMPROVEMENT: transposition table
+        # Transposition reuse is opt-in because priors/visits are edge stats.
         self._trans_table: Dict[int, Node] = {}
 
     # ------------------------------------------------------------------
@@ -57,11 +60,12 @@ class MCTS:
     # ------------------------------------------------------------------
     def new_root(self, state: QuoridorState) -> Node:
         h = hash(state)
-        if h in self._trans_table:
+        if self.use_transpositions and h in self._trans_table:
             node = self._trans_table[h]
         else:
             node = Node(prior=1.0, state=state, to_play=state.current_player)
-            self._trans_table[h] = node
+            if self.use_transpositions:
+                self._trans_table[h] = node
         node.action_from_parent = -1
         return node
 
@@ -91,7 +95,7 @@ class MCTS:
         best_action = -1
         best_child = None
         for action, child in node.children.items():
-            score = child.puct_score(n_parent, self.c_puct)
+            score = child.puct_score(n_parent, self.c_puct, parent_to_play=node.to_play)
             if score > best_score:
                 best_score = score
                 best_action = action
@@ -112,9 +116,9 @@ class MCTS:
             node.expanded = True
             return
         for action in actions:
-            child_state = apply_action(node.state, action)
+            child_state = apply_action(node.state, action, validate=False)
             h = hash(child_state)
-            if h in self._trans_table:
+            if self.use_transpositions and h in self._trans_table:
                 child = self._trans_table[h]
             else:
                 child = Node(
@@ -123,7 +127,8 @@ class MCTS:
                     to_play=child_state.current_player,
                     action_from_parent=action,
                 )
-                self._trans_table[h] = child
+                if self.use_transpositions:
+                    self._trans_table[h] = child
             node.children[action] = child
         node.expanded = True
 
@@ -168,15 +173,13 @@ class MCTS:
         simulations_remaining = num_simulations
 
         if not root.expanded:
-            obs = encode_state(root.state.canonical())
-            mask = _legal_mask(root.state)
-            policy, value = inference_fn(obs[None], mask[None])
-            self.expand(root, policy[0])
+            policy, value = _evaluate_state(root.state, inference_fn)
+            self.expand(root, policy)
             if add_noise:
                 self.add_dirichlet_noise(root)
             if num_simulations <= 0:
                 return
-            root.backup(value[0, 0])
+            root.backup(value)
             simulations_remaining -= 1
 
         for _ in range(simulations_remaining):
@@ -188,11 +191,9 @@ class MCTS:
                 self._backup(path, value)
                 continue
 
-            obs  = encode_state(leaf.state.canonical())
-            mask = _legal_mask(leaf.state)
-            policy, value = inference_fn(obs[None], mask[None])
-            self.expand(leaf, policy[0])
-            self._backup(path, float(value[0, 0]))
+            policy, value = _evaluate_state(leaf.state, inference_fn)
+            self.expand(leaf, policy)
+            self._backup(path, value)
 
     # ------------------------------------------------------------------
     def action_probs(
@@ -244,6 +245,19 @@ class MCTS:
 def _legal_mask(state: QuoridorState) -> np.ndarray:
     from env.actions import legal_action_mask
     return legal_action_mask(state)
+
+
+def _canonical_legal_mask(state: QuoridorState) -> np.ndarray:
+    return canonical_legal_action_mask(state)
+
+
+def _evaluate_state(state: QuoridorState, inference_fn) -> tuple[np.ndarray, float]:
+    """Evaluate a real state while presenting canonical actions to the network."""
+    obs = encode_state(state.canonical())
+    mask = _canonical_legal_mask(state)
+    policy_canonical, value = inference_fn(obs[None], mask[None])
+    policy = policy_from_canonical(policy_canonical[0], state)
+    return policy, float(value[0, 0])
 
 
 def _terminal_value(winner_id: Optional[int], to_play: int) -> float:

@@ -24,6 +24,7 @@ import numpy as np
 
 OBS_CHANNELS = 20
 OBS_SHAPE = (OBS_CHANNELS, 9, 9)
+SCHEMA_VERSION = 2
 
 
 class ReplayBuffer:
@@ -114,6 +115,7 @@ class ReplayBuffer:
             ptr = self._ptr
             np.savez_compressed(
                 path,
+                schema_version=np.array(SCHEMA_VERSION, dtype=np.int64),
                 capacity=np.array(self.capacity, dtype=np.int64),
                 size=np.array(size, dtype=np.int64),
                 ptr=np.array(ptr, dtype=np.int64),
@@ -129,6 +131,12 @@ class ReplayBuffer:
         """Load a replay buffer saved by save()."""
         path = Path(path)
         with np.load(path, allow_pickle=False) as data:
+            schema_version = int(data["schema_version"]) if "schema_version" in data else 1
+            if schema_version != SCHEMA_VERSION:
+                raise ValueError(
+                    f"Replay buffer at {path} has schema version {schema_version}; "
+                    f"expected {SCHEMA_VERSION}. Start with --fresh_buffer."
+                )
             saved_capacity = int(data["capacity"])
             size = int(data["size"])
             ptr = int(data["ptr"])

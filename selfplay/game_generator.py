@@ -19,7 +19,7 @@ from env.quoridor_env import QuoridorEnv
 from env.encoding import encode_state, mirror_state_and_policy
 from env.rules import adjudicate_winner, legal_actions, winner
 from env.state import QuoridorState
-from env.actions import NUM_ACTIONS
+from env.actions import NUM_ACTIONS, policy_to_canonical
 from mcts.search import MCTS
 
 
@@ -176,7 +176,7 @@ class GameGenerator:
 
             # Record observation from current player's perspective (MUST be canonical)
             obs = encode_state(env.state.canonical())
-            raw.append((obs, policy, cur_player))
+            raw.append((obs, policy_to_canonical(policy, env.state), cur_player))
 
             action = select_action_from_policy(policy, env.state)
 

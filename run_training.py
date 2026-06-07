@@ -89,10 +89,16 @@ def main():
                         help="MCTS simulations per move (overrides preset)")
     parser.add_argument("--train-steps", type=int, default=None,
                         help="Total training steps (overrides preset)")
+    parser.add_argument("--batch-size", type=int, default=None,
+                        help="Training batch size")
     parser.add_argument("--eval-every", type=int, default=2000,
                         help="Evaluation frequency (default: 2000 steps)")
     parser.add_argument("--eval-games", type=int, default=4,
                         help="Games per evaluation (default: 4)")
+    parser.add_argument("--eval-max-moves", type=int, default=None,
+                        help="Evaluation move cap before adjudication")
+    parser.add_argument("--resign-threshold", type=float, default=None,
+                        help="Optional resignation threshold (e.g. -0.9)")
     parser.add_argument("--eval-show", choices=["off", "moves", "board"], default="off",
                         help="Print evaluation matches to the console")
     parser.add_argument("--eval-show-games", type=int, default=1,
@@ -137,12 +143,18 @@ def main():
         num_sims = args.num_sims
     if args.train_steps is not None:
         train_steps = args.train_steps
-    
+
     print(f"\n✓ Configuration: {preset_name}")
     print(f"  Workers: {num_workers}")
     print(f"  MCTS sims/move: {num_sims}")
     print(f"  Training steps: {train_steps}")
+    if args.batch_size is not None:
+        print(f"  Batch size: {args.batch_size}")
     print(f"  Evaluation every: {args.eval_every} steps ({args.eval_games} games)")
+    if args.eval_max_moves is not None:
+        print(f"  Evaluation max moves: {args.eval_max_moves}")
+    if args.resign_threshold is not None:
+        print(f"  Resign threshold: {args.resign_threshold}")
     if args.eval_show != "off":
         print(f"  Evaluation console view: {args.eval_show} ({args.eval_show_games} game(s))")
     print(f"  torch.compile: {'enabled' if args.compile and not args.no_compile else 'disabled'}")
@@ -166,6 +178,12 @@ def main():
         "--eval_show", args.eval_show,
         "--eval_show_games", str(args.eval_show_games),
     ]
+    if args.batch_size is not None:
+        cmd.extend(["--batch_size", str(args.batch_size)])
+    if args.eval_max_moves is not None:
+        cmd.extend(["--eval_max_moves", str(args.eval_max_moves)])
+    if args.resign_threshold is not None:
+        cmd.extend(["--resign_threshold", str(args.resign_threshold)])
     
     if args.resume:
         cmd.append("--resume")

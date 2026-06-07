@@ -224,6 +224,7 @@ def process_selfplay_worker(
         noise_frac=0.5,
         augment=True,
         max_moves=max_moves,
+        resign_threshold=resign_threshold,
     )
     gen_full = GameGenerator(
         inference_fn=inference_fn,
@@ -232,6 +233,7 @@ def process_selfplay_worker(
         noise_frac=0.35,
         augment=True,
         max_moves=max_moves,
+        resign_threshold=resign_threshold,
     )
 
     while not stop_event.is_set():
@@ -284,6 +286,8 @@ def print_training_status(metrics: dict, buffer: ReplayBuffer, elapsed: float) -
         f"[step {int(metrics.get('step', 0)):>7}] "
         f"buf={buffer.size:>6}  "
         f"loss={metrics.get('loss', 0):.4f}  "
+        f"core={metrics.get('loss_no_l2', 0):.4f}  "
+        f"l2={metrics.get('l2_loss', 0):.4f}  "
         f"p={metrics.get('policy_loss', 0):.4f}  "
         f"v={metrics.get('value_loss', 0):.4f}  "
         f"net_H={metrics.get('entropy', 0):.3f}  "
@@ -311,6 +315,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_sims",        type=int,            default=200)
     # Cheap sims used only until min_buffer_size is reached (~10× faster fill).
     parser.add_argument("--warmup_sims",     type=int,            default=20)
+    parser.add_argument("--batch_size",      type=int,            default=1024,
+                        help="Training batch size.")
     parser.add_argument("--train_steps",     type=int,            default=100_000)
     parser.add_argument("--eval_every",      type=int,            default=2_000,
                         help="Run evaluation every N training steps. Set 0 to disable.")
@@ -318,6 +324,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Run one evaluation immediately after the buffer is ready.")
     parser.add_argument("--eval_games",      type=int,            default=4)
     parser.add_argument("--eval_sims",       type=int,            default=25)
+    parser.add_argument("--inference_sync_every", type=int,       default=25,
+                        help="Copy trainer weights to self-play inference every N optimizer steps.")
     parser.add_argument("--eval_max_moves",  type=int,            default=MAX_MOVES)
     parser.add_argument("--eval_show",       choices=["off", "moves", "board"], default="off",
                         help="Print evaluation matches to the console: compact moves or full boards.")
@@ -430,7 +438,11 @@ def main() -> None:
     if cold_target > 0 and buffer.size < cold_target:
         fill_buffer_randomly(buffer, cold_target, max_moves=args.force_max_moves)
 
-    cfg = TrainConfig(device=str(device), log_every=args.log_every)
+    cfg = TrainConfig(
+        device=str(device),
+        log_every=args.log_every,
+        batch_size=args.batch_size,
+    )
     loop = TrainLoop(model, buffer, cfg)
     loop.step = start_step
 
@@ -551,6 +563,9 @@ def main() -> None:
             if metrics.get("skipped"):
                 print(f"[step {loop.step:>7}] skipped non-finite loss")
                 continue
+
+            if args.inference_sync_every > 0 and (loop.step % args.inference_sync_every) == 0:
+                server.update_model(model)
 
             if (loop.step % args.log_every) == 0:
                 print_training_status(metrics, buffer, time.time() - train_t0)

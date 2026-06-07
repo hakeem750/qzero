@@ -1,6 +1,7 @@
 import numpy as np
 
 from env.state import initial_state
+from env.state import QuoridorState
 from mcts.node import Node
 from mcts.search import MCTS
 
@@ -73,3 +74,30 @@ class TestMCTSVirtualLoss:
 
         assert calls == 5
         assert root.visit_count == 5
+
+
+def test_mcts_prefers_immediate_win():
+    state = QuoridorState(
+        p1_pos=(7, 4),
+        p2_pos=(8, 0),
+        h_walls=frozenset(),
+        v_walls=frozenset(),
+        p1_walls=0,
+        p2_walls=0,
+        current_player=1,
+        move_count=20,
+    )
+
+    def inference_fn(obs_batch, mask_batch):
+        policy = mask_batch.astype(np.float64)
+        policy /= policy.sum(axis=1, keepdims=True)
+        value = np.zeros((obs_batch.shape[0], 1), dtype=np.float32)
+        return policy, value
+
+    mcts = MCTS(c_puct=1.5, noise_frac=0.0, virtual_loss=0)
+    root = mcts.new_root(state)
+
+    mcts.run_simulations_sync(root, inference_fn, num_simulations=100, add_noise=False)
+
+    visits = {action: child.visit_count for action, child in root.children.items()}
+    assert max(visits, key=visits.get) == 1

@@ -94,6 +94,7 @@ class TrainLoop:
 
             # Value loss: MSE
             value_loss = F.mse_loss(v_pred.squeeze(-1), value)
+            loss_no_l2 = policy_loss + value_loss
 
             # L2 regularisation (weight decay in AdamW also does this,
             # but explicit reg makes the ablation clear)
@@ -101,7 +102,7 @@ class TrainLoop:
                 p.pow(2).sum() for p in self.model.parameters() if p.requires_grad
             )
 
-            loss = policy_loss + value_loss + l2
+            loss = loss_no_l2 + l2
 
         if not torch.isfinite(loss):
             return {"skipped": 1.0}
@@ -125,6 +126,8 @@ class TrainLoop:
 
         metrics = {
             "loss":         loss.item(),
+            "loss_no_l2":   loss_no_l2.item(),
+            "l2_loss":      l2.item(),
             "policy_loss":  policy_loss.item(),
             "value_loss":   value_loss.item(),
             "entropy":      entropy,
@@ -154,6 +157,7 @@ class TrainLoop:
                 print(
                     f"[{self.step:>7}] "
                     f"loss={metrics.get('loss', 0):.4f}  "
+                    f"core={metrics.get('loss_no_l2', 0):.4f}  "
                     f"p={metrics.get('policy_loss', 0):.4f}  "
                     f"v={metrics.get('value_loss', 0):.4f}  "
                     f"H={metrics.get('entropy', 0):.3f}  "

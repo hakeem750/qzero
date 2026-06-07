@@ -17,8 +17,10 @@ Design:
 """
 from __future__ import annotations
 
+import copy
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from concurrent.futures import Future
 from typing import List
@@ -59,11 +61,12 @@ class InferenceServer:
         timeout: float = 0.005,   # seconds to wait before flushing partial batch
         dtype: torch.dtype = torch.bfloat16,   # IMPROVEMENT: BF16
     ) -> None:
-        self.model = model.eval().to(device)
         self.device = torch.device(device)
+        self.model = copy.deepcopy(model).eval().to(self.device)
         self.batch_size = batch_size
         self.timeout = timeout
         self.dtype = dtype
+        self._model_lock = threading.RLock()
 
         self._queue: queue.Queue[_InferenceRequest | None] = queue.Queue()
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -86,6 +89,12 @@ class InferenceServer:
         self._queue.put(req)
         return req.future
 
+    def update_model(self, model: nn.Module) -> None:
+        """Copy fresh weights into the server's private eval-mode model."""
+        with self._model_lock:
+            self.model.load_state_dict(model.state_dict())
+            self.model.eval()
+
     # ------------------------------------------------------------------
     def _serve(self) -> None:
         """Main inference loop — drains queue into batches."""
@@ -101,11 +110,14 @@ class InferenceServer:
             except queue.Empty:
                 continue
 
-            # Drain up to batch_size with a short timeout
-            deadline = torch.cuda.Event(enable_timing=False) if self.device.type == "cuda" else None
+            # Drain up to batch_size with a short timeout.
+            deadline = time.monotonic() + self.timeout
             while len(batch) < self.batch_size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 try:
-                    req = self._queue.get_nowait()
+                    req = self._queue.get(timeout=remaining)
                     if req is None:
                         self._running = False
                         break
@@ -128,8 +140,10 @@ class InferenceServer:
         obs_t  = torch.from_numpy(obs_np ).to(self.device, dtype=self.dtype)
         mask_t = torch.from_numpy(mask_np).to(self.device, dtype=torch.bool)
 
-        with torch.autocast(device_type=self.device.type, dtype=self.dtype):
-            policy, value = self.model.predict(obs_t.float(), mask_t)
+        with self._model_lock:
+            self.model.eval()
+            with torch.autocast(device_type=self.device.type, dtype=self.dtype):
+                policy, value = self.model.predict(obs_t.float(), mask_t)
 
         policy_np = policy.cpu().float().numpy()
         value_np  = value.cpu().float().numpy()

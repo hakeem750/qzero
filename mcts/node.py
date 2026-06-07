@@ -53,18 +53,27 @@ class Node:
     # ------------------------------------------------------------------
     @property
     def q_value(self) -> float:
-        """Mean action value, including virtual loss penalty."""
-        n = self.visit_count + self.virtual_loss
-        if n <= 0:
+        """Mean value from this node's player-to-move perspective."""
+        if self.visit_count <= 0:
             return 0.0
-        return (self.value_sum - self.virtual_loss) / n
+        return self.value_sum / self.visit_count
 
-    def puct_score(self, parent_visit: int, c_puct: float) -> float:
+    def puct_score(
+        self,
+        parent_visit: int,
+        c_puct: float,
+        parent_to_play: int | None = None,
+    ) -> float:
         """Q + U (PUCT exploration bonus)."""
         parent_visit = max(0, parent_visit)
         child_visit = max(0, self.visit_count + self.virtual_loss)
         u = c_puct * self.prior * math.sqrt(parent_visit) / (1 + child_visit)
-        return self.q_value + u
+        q = self.q_value
+        if parent_to_play is not None and self.to_play != parent_to_play:
+            q = -q
+        if self.virtual_loss:
+            q -= self.virtual_loss / max(1, child_visit)
+        return q + u
 
     # ------------------------------------------------------------------
     # Virtual loss (IMPROVEMENT)
