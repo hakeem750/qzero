@@ -85,6 +85,20 @@ buffer. Use `--compile` only for explicit comparison runs.
 python scripts/train.py --resume
 ```
 
+### Standalone evaluation
+
+Run candidate vs best without starting training, and watch the first game in the terminal:
+
+```bash
+python scripts/evaluate.py --display board --num-games 1
+```
+
+To evaluate a specific checkpoint:
+
+```bash
+python scripts/evaluate.py --candidate checkpoints/model_step_0000003.pt --display moves
+```
+
 ### Research logging
 
 Every training run can write a manifest and metric stream under `research/experiments/<experiment_id>/`.
