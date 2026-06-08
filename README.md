@@ -85,6 +85,18 @@ buffer. Use `--compile` only for explicit comparison runs.
 python scripts/train.py --resume
 ```
 
+### Research logging
+
+Every training run can write a manifest and metric stream under `research/experiments/<experiment_id>/`.
+
+Use an explicit experiment id when you want a stable name:
+
+```bash
+python scripts/train.py --experiment_id E023 --checkpoint_dir checkpoints/E023 --buffer_path data/E023.npz ...
+```
+
+The Markdown research log template lives in `research/research_log.md`, and the paper draft outline lives in `research/paper.md`.
+
 ### Run tests
 
 ```bash

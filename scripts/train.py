@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import copy
 import multiprocessing as mp
+import shlex
 import pathlib
 import queue
 import sys
@@ -28,6 +29,7 @@ from env.state import MAX_MOVES
 from evaluation.arena import Arena
 from network.inference_server import InferenceServer
 from network.policy_value_net import PolicyValueNet, build_net
+from research.tracking import append_jsonl, collect_git_info, generate_experiment_id, write_json, utc_now
 from replay.buffer import ReplayBuffer
 from selfplay.game_generator import GameGenerator
 from trainer.train_loop import TrainConfig, TrainLoop
@@ -213,6 +215,31 @@ def save_replay_buffer(buffer: ReplayBuffer, path: pathlib.Path) -> None:
     t0 = time.time()
     saved_path = buffer.save(path)
     print(f"  saved replay buffer ({buffer.size} samples) to {saved_path} in {time.time() - t0:.1f}s")
+
+
+def initialize_research_record(
+    args: argparse.Namespace,
+    experiment_id: str,
+    command: str,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+    research_root = args.research_root
+    experiment_dir = research_root / "experiments" / experiment_id
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = experiment_dir / "manifest.json"
+    metrics_path = experiment_dir / "metrics.jsonl"
+    summary_path = experiment_dir / "summary.json"
+
+    manifest = {
+        "experiment_id": experiment_id,
+        "started_at_utc": utc_now(),
+        "command": command,
+        "args": vars(args),
+        "git": collect_git_info(pathlib.Path(__file__).parent.parent),
+    }
+    write_json(manifest_path, manifest)
+
+    return manifest_path, metrics_path, summary_path
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +488,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume",          action="store_true")
     parser.add_argument("--checkpoint_dir",  type=pathlib.Path,   default=CKPT_DIR,
                         help="Directory for model_step_*.pt and best_model.pt.")
+    parser.add_argument("--experiment_id",   type=str,            default=None,
+                        help="Name for the research experiment folder under research/experiments/.")
+    parser.add_argument("--research_root",   type=pathlib.Path,   default=pathlib.Path("research"),
+                        help="Root folder for manifests, metrics, and the research log.")
     parser.add_argument("--buffer_path",     type=pathlib.Path,   default=DEFAULT_BUFFER_PATH)
     parser.add_argument("--resume_buffer",   action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--fresh_buffer",    action="store_true", help="Start with an empty replay buffer instead of loading the saved one.")
@@ -491,6 +522,10 @@ def main() -> None:
             ensure_fresh_checkpoint_dir()
         except RuntimeError as exc:
             raise SystemExit(str(exc)) from exc
+
+    experiment_id = args.experiment_id or generate_experiment_id()
+    command = shlex.join(sys.argv)
+    manifest_path, metrics_path, summary_path = initialize_research_record(args, experiment_id, command)
 
     set_seeds(args.seed)
     device = torch.device(args.device)
@@ -680,6 +715,8 @@ def main() -> None:
 
     print("Training started.")
     train_t0 = time.time()
+    last_train_metrics: dict | None = None
+    last_eval_result: dict | None = None
     try:
         if args.eval_now:
             print(f"\n[step {loop.step}] Running evaluation (--eval_now)...")
@@ -703,6 +740,8 @@ def main() -> None:
             for key, value in result.items():
                 if isinstance(value, (int, float, bool)):
                     writer.add_scalar(f"eval/{key}", float(value), loop.step)
+            append_jsonl(metrics_path, {"kind": "eval", "step": loop.step, **result})
+            last_eval_result = result
             if result["promoted"]:
                 best_model.load_state_dict(model.state_dict())
                 best_step = loop.step
@@ -727,6 +766,17 @@ def main() -> None:
                     if isinstance(value, (int, float)):
                         writer.add_scalar(f"train/{key}", value, loop.step)
                 writer.add_scalar("replay/size", buffer.size, loop.step)
+                append_jsonl(
+                    metrics_path,
+                    {
+                        "kind": "train",
+                        "step": loop.step,
+                        "elapsed_s": round(time.time() - train_t0, 3),
+                        "buffer_size": buffer.size,
+                        **metrics,
+                    },
+                )
+                last_train_metrics = metrics
 
             if (loop.step % args.ckpt_every) == 0:
                 save_checkpoint(model, loop.step, loop)
@@ -756,6 +806,8 @@ def main() -> None:
                 for key, value in result.items():
                     if isinstance(value, (int, float, bool)):
                         writer.add_scalar(f"eval/{key}", float(value), loop.step)
+                append_jsonl(metrics_path, {"kind": "eval", "step": loop.step, **result})
+                last_eval_result = result
                 if result["promoted"]:
                     best_model.load_state_dict(model.state_dict())
                     best_step = loop.step
@@ -776,6 +828,21 @@ def main() -> None:
         writer.close()
         save_checkpoint(model, loop.step, loop)
         save_replay_buffer(buffer, args.buffer_path)
+        write_json(
+            summary_path,
+            {
+                "finished_at_utc": utc_now(),
+                "final_step": loop.step,
+                "best_step": best_step,
+                "experiment_id": experiment_id,
+                "checkpoint_dir": str(CKPT_DIR),
+                "buffer_path": str(args.buffer_path),
+                "manifest_path": str(manifest_path),
+                "metrics_path": str(metrics_path),
+                "last_train_metrics": last_train_metrics,
+                "last_eval_result": last_eval_result,
+            },
+        )
 
     print("Training complete.")
 

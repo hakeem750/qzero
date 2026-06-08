@@ -136,6 +136,11 @@ models/
 logs/
 outputs/
 data/
+research/experiments/
+research/figures/
+research/games/
+research/models/
+research/logs/
 *.pth
 *.pt
 *.pkl
