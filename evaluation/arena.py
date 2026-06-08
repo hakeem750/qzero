@@ -177,8 +177,17 @@ class Arena:
         display: str = "off",
         display_games: int = 1,
     ) -> dict:
+        """
+        Run an evaluation match.
+
+        If display is left off but display_games is positive, the first
+        display_games are still shown in compact console mode so at least one
+        game can be watched during evaluation.
+        """
         fn_cand = _greedy_inference(candidate, self.device, self.dtype)
         fn_best = _greedy_inference(best_model, self.device, self.dtype)
+
+        display_mode = display if display != "off" else ("moves" if display_games > 0 else "off")
 
         wins = draws = losses = 0
         game_lengths = []
@@ -188,7 +197,7 @@ class Arena:
         t0 = time.time()
 
         for i in range(self.num_games):
-            show_display = display if i < display_games else "off"
+            show_display = display_mode if i < display_games else "off"
             if progress and show_display != "off":
                 print(f"\n  eval game {i + 1}/{self.num_games}:")
 

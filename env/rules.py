@@ -172,6 +172,63 @@ def legal_actions(state: QuoridorState) -> List[int]:
 # Apply action → next state
 # ---------------------------------------------------------------------------
 
+def _resolve_pawn_destination(state: QuoridorState, action: int) -> tuple[int, int] | None:
+    """
+    Resolve a pawn move to its destination if it is legal in the current state.
+
+    This centralizes pawn movement checks so both legal action generation and
+    state application enforce the same wall-blocking rules.
+    """
+    cur = state.active_pos
+    opp = state.opponent_pos
+    hw, vw = state.h_walls, state.v_walls
+
+    if action in MOVE_DELTAS:
+        dr, dc = MOVE_DELTAS[action]
+        nr, nc = cur[0] + dr, cur[1] + dc
+        if not (0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE):
+            return None
+        if (nr, nc) == opp:
+            return None
+        if can_move(cur[0], cur[1], nr, nc, hw, vw):
+            return nr, nc
+        return None
+
+    if action in JUMP_DELTAS:
+        dr, dc = JUMP_DELTAS[action]
+        mid = (cur[0] + dr // 2, cur[1] + dc // 2)
+        landing = (cur[0] + dr, cur[1] + dc)
+        if mid != opp:
+            return None
+        if not (0 <= landing[0] < BOARD_SIZE and 0 <= landing[1] < BOARD_SIZE):
+            return None
+        if can_move(opp[0], opp[1], landing[0], landing[1], hw, vw):
+            return landing
+        return None
+
+    if action in DIAG_SPEC:
+        prim, side = DIAG_SPEC[action]
+        pdr, pdc = MOVE_DELTAS[prim]
+        sdr, sdc = MOVE_DELTAS[side]
+        mid = (cur[0] + pdr, cur[1] + pdc)
+        jump_landing = (opp[0] + pdr, opp[1] + pdc)
+        landing = (opp[0] + sdr, opp[1] + sdc)
+
+        if mid != opp:
+            return None
+        if 0 <= jump_landing[0] < BOARD_SIZE and 0 <= jump_landing[1] < BOARD_SIZE:
+            # If the straight jump square is open, the diagonal is not legal.
+            if can_move(opp[0], opp[1], jump_landing[0], jump_landing[1], hw, vw):
+                return None
+        if not (0 <= landing[0] < BOARD_SIZE and 0 <= landing[1] < BOARD_SIZE):
+            return None
+        if can_move(opp[0], opp[1], landing[0], landing[1], hw, vw):
+            return landing
+        return None
+
+    return None
+
+
 def apply_action(state: QuoridorState, action: int, validate: bool = True) -> QuoridorState:
     """Return the state resulting from applying action. Pure function."""
     p1, p2 = state.p1_pos, state.p2_pos
@@ -182,39 +239,13 @@ def apply_action(state: QuoridorState, action: int, validate: bool = True) -> Qu
         raise ValueError(f"Illegal action: {action}")
 
     if action < 12:
-        # Pawn move
-        if action in MOVE_DELTAS:
-            dr, dc = MOVE_DELTAS[action]
-        elif action in JUMP_DELTAS:
-            dr, dc = JUMP_DELTAS[action]
-        else:
-            # diagonal
-            prim, side = DIAG_SPEC[action]
-            adj = MOVE_DELTAS[prim]
-            sdr, sdc = MOVE_DELTAS[side]
-            if cur == 1:
-                r, c = p1
-                opp_r, opp_c = p2
-            else:
-                r, c = p2
-                opp_r, opp_c = p1
-            # land: opponent cell + side delta
-            nr = opp_r + sdr
-            nc = opp_c + sdc
-            new_pos = (nr, nc)
-            if cur == 1:
-                p1 = new_pos
-            else:
-                p2 = new_pos
-            return QuoridorState(p1, p2, hw, vw, p1w, p2w,
-                                 3 - cur, state.move_count + 1)
-
+        dest = _resolve_pawn_destination(state, action)
+        if dest is None:
+            raise ValueError(f"Illegal pawn action: {action}")
         if cur == 1:
-            r, c = p1
-            p1 = (r + dr, c + dc)
+            p1 = dest
         else:
-            r, c = p2
-            p2 = (r + dr, c + dc)
+            p2 = dest
 
     elif action < V_WALL_OFFSET:
         # Horizontal wall
