@@ -185,11 +185,11 @@ class TestTerminal:
         assert shortest_path_length(s.p1_pos, BOARD_SIZE - 1, s.h_walls, s.v_walls) == 8
         assert shortest_path_length(s.p2_pos, 0, s.h_walls, s.v_walls) == 8
 
-    def test_adjudicate_move_cap_prefers_closer_player(self):
+    def test_adjudicate_move_cap_is_draw(self):
         from env.state import MAX_MOVES
         s = _make_state(p1_pos=(7, 4), p2_pos=(8, 4), move_count=MAX_MOVES)
         assert winner(s) == 0
-        assert adjudicate_winner(s) == 1
+        assert adjudicate_winner(s) == 0
 
     def test_hash_includes_move_count(self):
         s1 = _make_state(move_count=10)

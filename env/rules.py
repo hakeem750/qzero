@@ -295,35 +295,13 @@ def winner(state: QuoridorState) -> int | None:
 
 def adjudicate_winner(state: QuoridorState) -> int:
     """
-    Resolve an artificial move-limit game by shortest path distance.
+    Resolve an artificial move-limit game.
 
-    Quoridor has no natural draw condition in this implementation; draws are
-    introduced only by the training/evaluation move cap. When the cap is hit,
-    the player closer to their goal is treated as the winner. Exact ties remain
-    draws.
+    Move-cap games are treated as draws. This keeps the evaluation outcome
+    aligned with the game result instead of introducing shortest-path
+    tie-breaking after the cap is reached.
     """
     natural_winner = winner(state)
     if natural_winner not in (None, 0):
         return natural_winner
-
-    p1_distance = shortest_path_length(state.p1_pos, BOARD_SIZE - 1, state.h_walls, state.v_walls)
-    p2_distance = shortest_path_length(state.p2_pos, 0, state.h_walls, state.v_walls)
-
-    if p1_distance is None and p2_distance is None:
-        return 0
-    if p1_distance is None:
-        return 2
-    if p2_distance is None:
-        return 1
-    if p1_distance < p2_distance:
-        return 1
-    if p2_distance < p1_distance:
-        return 2
-
-    p1_progress = state.p1_pos[0]
-    p2_progress = BOARD_SIZE - 1 - state.p2_pos[0]
-    if p1_progress > p2_progress:
-        return 1
-    if p2_progress > p1_progress:
-        return 2
     return 0

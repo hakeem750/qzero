@@ -17,7 +17,7 @@ import torch
 
 from env.actions import action_name
 from env.quoridor_env import QuoridorEnv
-from env.rules import adjudicate_winner, winner
+from env.rules import winner
 from env.state import MAX_MOVES
 from mcts.search import MCTS
 from selfplay.game_generator import select_action_from_policy
@@ -119,14 +119,14 @@ def play_game(
 
     natural_winner = winner(env.state)
     cutoff = natural_winner in (None, 0) and env.state.move_count >= max_moves
-    winner_id = adjudicate_winner(env.state) if cutoff else (natural_winner or 0)
+    winner_id = natural_winner or 0
 
     if display != "off":
         if winner_id == 0:
             result_text = "draw"
         else:
             result_text = f"{player_label(winner_id)} wins"
-        cutoff_text = " cutoff-adjudicated" if cutoff else ""
+        cutoff_text = " cutoff-draw" if cutoff else ""
         print(
             f"  eval game {game_index} result: {result_text} "
             f"moves={env.state.move_count}{cutoff_text}",

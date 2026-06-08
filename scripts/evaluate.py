@@ -18,6 +18,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 from evaluation.arena import Arena
+from env.state import MAX_MOVES
 from network.policy_value_net import build_net
 from scripts.watch_match import _clean_state_dict_keys
 
@@ -54,7 +55,7 @@ def main() -> None:
                         help="Number of evaluation games to play.")
     parser.add_argument("--sims", type=int, default=25,
                         help="MCTS simulations per move.")
-    parser.add_argument("--max-moves", type=int, default=300,
+    parser.add_argument("--max-moves", type=int, default=MAX_MOVES,
                         help="Move cap before adjudication.")
     parser.add_argument("--win-thresh", type=float, default=0.55,
                         help="Promotion threshold used for reporting.")
@@ -111,6 +112,12 @@ def main() -> None:
         f"elo={result['elo']:.1f}  "
         f"promoted={result['promoted']}"
     )
+    cutoff_rate = float(result.get("cutoff_rate", 0.0))
+    if cutoff_rate >= 0.5:
+        print(
+            f"Warning: {cutoff_rate:.0%} of games reached the move cap. "
+            "This evaluation is still too cutoff-heavy to be very informative."
+        )
 
 
 if __name__ == "__main__":
