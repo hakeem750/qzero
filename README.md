@@ -93,6 +93,12 @@ Run candidate vs best without starting training, and watch the first game in the
 python scripts/evaluate.py --display board --num-games 1
 ```
 
+If your checkpoints live under a different folder, point the evaluator at that directory:
+
+```bash
+python scripts/evaluate.py --checkpoint-dir checkpoints/progress_gpu --display board --num-games 1
+```
+
 To evaluate a specific checkpoint:
 
 ```bash
