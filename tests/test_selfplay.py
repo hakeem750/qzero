@@ -1,5 +1,6 @@
 import numpy as np
 
+from env.anti_stall import AntiStallConfig
 from env.actions import NUM_ACTIONS
 from selfplay.game_generator import GameGenerator, select_action_from_policy
 from tests.test_rules import _make_state
@@ -32,6 +33,12 @@ def test_max_move_cutoff_generates_adjudicated_samples():
         num_simulations=0,
         augment=True,
         max_moves=2,
+        anti_stall_config=AntiStallConfig(
+            progress_weight=0.0,
+            repeat_penalty=0.0,
+            non_progress_penalty=0.0,
+            wall_no_progress_penalty=0.0,
+        ),
         rng=np.random.default_rng(1),
     ).generate()
 
@@ -59,6 +66,12 @@ def test_resignation_keeps_assigned_winner():
         augment=False,
         max_moves=20,
         resign_threshold=-0.5,
+        anti_stall_config=AntiStallConfig(
+            progress_weight=0.0,
+            repeat_penalty=0.0,
+            non_progress_penalty=0.0,
+            wall_no_progress_penalty=0.0,
+        ),
     ).generate()
 
     assert steps

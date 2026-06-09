@@ -15,10 +15,11 @@ from typing import Callable, List, Tuple
 
 import numpy as np
 
+from env.anti_stall import AntiStallConfig, AntiStallTracker
 from env.quoridor_env import QuoridorEnv
 from env.encoding import encode_state, mirror_state_and_policy
 from env.rules import legal_actions, winner
-from env.state import QuoridorState
+from env.state import MAX_MOVES, QuoridorState
 from env.actions import NUM_ACTIONS, policy_to_canonical
 from mcts.search import MCTS
 
@@ -118,8 +119,9 @@ class GameGenerator:
         dirichlet_alpha: float = 0.3,
         noise_frac: float = 0.25,
         augment: bool = True,           # IMPROVEMENT
-        max_moves: int = 300,           # Optional move limit for curriculum
+        max_moves: int = MAX_MOVES,     # Optional move limit for curriculum
         resign_threshold: float | None = None,  # Optional: resign if value drops below threshold
+        anti_stall_config: AntiStallConfig | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
         self.inference_fn = inference_fn or _uniform_inference
@@ -127,6 +129,8 @@ class GameGenerator:
         self.augment = augment
         self.max_moves = max_moves
         self.resign_threshold = resign_threshold
+        self.anti_stall_config = anti_stall_config or AntiStallConfig()
+        self.last_game_info: dict[str, float | int | str | bool] = {}
         self.rng = rng or np.random.default_rng()
         self.mcts = MCTS(
             c_puct=c_puct,
@@ -144,11 +148,16 @@ class GameGenerator:
         env.reset()
         self.mcts.reset()
 
-        # Raw trajectory buffer: (obs, policy, player_at_step)
-        raw: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        # Raw trajectory buffer: (obs, policy, player_at_step, shaping)
+        raw: List[Tuple[np.ndarray, np.ndarray, int, float]] = []
         root = self.mcts.new_root(env.state)
-        move_count = 0
         game_winner: int | None = None
+        termination = "natural"
+        anti_stall = AntiStallTracker(self.anti_stall_config)
+        anti_stall.reset(env.state)
+        repeated_positions = 0
+        non_progress_moves = 0
+        progress_swing_total = 0.0
 
         while not env.is_terminal() and env.state.move_count < self.max_moves:
             move_number = env.state.move_count
@@ -175,9 +184,10 @@ class GameGenerator:
 
             # Record observation from current player's perspective (MUST be canonical)
             obs = encode_state(env.state.canonical())
-            raw.append((obs, policy_to_canonical(policy, env.state), cur_player))
+            raw.append((obs, policy_to_canonical(policy, env.state), cur_player, 0.0))
 
             action = select_action_from_policy(policy, env.state, rng=self.rng)
+            before_state = env.state
 
             # Tree reuse: advance root
             if action in root.children:
@@ -187,22 +197,60 @@ class GameGenerator:
                 # Edge case: action not in tree (e.g. noise led to unexpected pick)
                 env.step(action)
                 root = self.mcts.new_root(env.state)
+                event = anti_stall.observe(before_state, env.state, cur_player, action)
+                raw[-1] = (raw[-1][0], raw[-1][1], raw[-1][2], event.shaping)
+                repeated_positions += int(event.repeated)
+                non_progress_moves += int(event.progress_swing <= 0.0)
+                progress_swing_total += event.progress_swing
+                if event.repeated:
+                    game_winner = 0
+                    termination = "repetition"
+                    break
+                if event.stalled:
+                    game_winner = 0
+                    termination = "stall"
+                    break
                 continue
 
             env.step(action)
+            event = anti_stall.observe(before_state, env.state, cur_player, action)
+            raw[-1] = (raw[-1][0], raw[-1][1], raw[-1][2], event.shaping)
+            repeated_positions += int(event.repeated)
+            non_progress_moves += int(event.progress_swing <= 0.0)
+            progress_swing_total += event.progress_swing
+            if event.repeated:
+                game_winner = 0
+                termination = "repetition"
+                break
+            if event.stalled:
+                game_winner = 0
+                termination = "stall"
+                break
 
         if game_winner is None:
             game_winner = winner(env.state)
         if game_winner in (None, 0) and env.state.move_count >= self.max_moves:
             game_winner = 0
+            termination = "cutoff"
+
+        shaped_returns = [0.0] * len(raw)
+        running_by_player = {1: 0.0, 2: 0.0}
+        discount = self.anti_stall_config.shaping_discount
+        for idx in range(len(raw) - 1, -1, -1):
+            _, _, player, shaping = raw[idx]
+            opponent = 3 - player
+            running_by_player[player] = shaping + discount * running_by_player[player]
+            running_by_player[opponent] = -shaping + discount * running_by_player[opponent]
+            shaped_returns[idx] = running_by_player[player]
 
         # Assign outcomes (from each player's perspective at the time)
         steps: List[TrajectoryStep] = []
-        for obs, policy, player in raw:
+        for idx, (obs, policy, player, _) in enumerate(raw):
             if game_winner in (None, 0):
-                outcome = 0.0
+                final_outcome = 0.0
             else:
-                outcome = 1.0 if game_winner == player else -1.0
+                final_outcome = 1.0 if game_winner == player else -1.0
+            outcome = float(np.clip(final_outcome + shaped_returns[idx], -1.0, 1.0))
 
             steps.append(TrajectoryStep(obs=obs, policy=policy, outcome=outcome))
 
@@ -211,4 +259,14 @@ class GameGenerator:
                 m_obs, m_policy = mirror_state_and_policy(obs, policy)
                 steps.append(TrajectoryStep(obs=m_obs, policy=m_policy, outcome=outcome))
 
+        move_count = env.state.move_count
+        self.last_game_info = {
+            "termination": termination,
+            "winner": int(game_winner or 0),
+            "moves": move_count,
+            "repeated_positions": repeated_positions,
+            "non_progress_moves": non_progress_moves,
+            "avg_progress_swing": float(progress_swing_total / max(1, move_count)),
+            "used_shaping": True,
+        }
         return steps

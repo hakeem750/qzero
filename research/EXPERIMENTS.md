@@ -127,7 +127,7 @@ This file tracks all significant training runs for the Quoridor AlphaZero implem
 | LR Schedule | Cosine only | Warmup + Cosine | Stable early training |
 | MCTS Parallel | No virtual loss | Virtual loss=3 | Prevents thread collisions |
 | Dataset | 1× self-play | 2× via LR augmentation | Free 2× multiplier |
-| Draw Detection | Not specified | 500-move adjudication | Prevents infinite games |
+| Draw Detection | Not specified | 500-move draw cap | Prevents infinite games |
 | Transposition | No cache | Hash table | Reuses identical states |
 | Policy Head | 2 filters | 4 filters | Better action space coverage |
 | Weight Init | PyTorch default | Kaiming normal | Avoids vanishing gradients |

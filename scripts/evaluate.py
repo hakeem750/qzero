@@ -18,6 +18,7 @@ import torch
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 from evaluation.arena import Arena
+from env.anti_stall import AntiStallConfig
 from env.state import MAX_MOVES
 from network.policy_value_net import build_net
 from scripts.watch_match import _clean_state_dict_keys
@@ -56,13 +57,23 @@ def main() -> None:
     parser.add_argument("--sims", type=int, default=25,
                         help="MCTS simulations per move.")
     parser.add_argument("--max-moves", type=int, default=MAX_MOVES,
-                        help="Move cap before adjudication.")
+                        help="Move cap before declaring a draw.")
     parser.add_argument("--win-thresh", type=float, default=0.55,
                         help="Promotion threshold used for reporting.")
     parser.add_argument("--display", choices=["off", "moves", "board"], default="board",
                         help="How to show the first evaluated games.")
     parser.add_argument("--display-games", type=int, default=1,
                         help="Number of games to display.")
+    parser.add_argument("--repetition-limit", type=int, default=3,
+                        help="Repeated canonical board count that ends the game as draw. Set 0 to disable.")
+    parser.add_argument("--stall-limit", type=int, default=80,
+                        help="Consecutive non-progress plies that end the game as draw. Set 0 to disable.")
+    parser.add_argument("--progress-weight", type=float, default=0.02,
+                        help="Progress shaping weight used by anti-stall telemetry.")
+    parser.add_argument("--repeat-penalty", type=float, default=0.03)
+    parser.add_argument("--non-progress-penalty", type=float, default=0.002)
+    parser.add_argument("--wall-no-progress-penalty", type=float, default=0.01)
+    parser.add_argument("--shaping-discount", type=float, default=0.99)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
@@ -92,6 +103,15 @@ def main() -> None:
         win_thresh=args.win_thresh,
         max_moves=args.max_moves,
         device=str(device),
+        anti_stall_config=AntiStallConfig(
+            repetition_limit=args.repetition_limit,
+            stall_limit=args.stall_limit,
+            progress_weight=args.progress_weight,
+            repeat_penalty=args.repeat_penalty,
+            non_progress_penalty=args.non_progress_penalty,
+            wall_no_progress_penalty=args.wall_no_progress_penalty,
+            shaping_discount=args.shaping_discount,
+        ),
     )
 
     result = arena.evaluate(
@@ -109,6 +129,10 @@ def main() -> None:
         f"cutoff={result.get('cutoff_rate', 0.0):.2f}  "
         f"H={result['policy_entropy']:.3f}  "
         f"v_cal={result['value_calibration_mse']:.3f}  "
+        f"rep={result.get('repetition_rate', 0.0):.2f}  "
+        f"stall={result.get('stall_rate', 0.0):.2f}  "
+        f"nonprog={result.get('non_progress_rate', 0.0):.2f}  "
+        f"path={result.get('avg_progress_swing', 0.0):+.3f}  "
         f"elo={result['elo']:.1f}  "
         f"promoted={result['promoted']}"
     )

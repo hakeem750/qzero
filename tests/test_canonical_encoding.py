@@ -101,7 +101,8 @@ class TestValueTargetAlignment:
 
     def test_value_sign_draw(self):
         """Draws produce outcome 0 for all."""
-        # With 400 moves, game ends in draw
+        from env.state import MAX_MOVES
+
         final_state = QuoridorState(
             p1_pos=(4, 4),
             p2_pos=(4, 5),
@@ -110,7 +111,7 @@ class TestValueTargetAlignment:
             p1_walls=0,
             p2_walls=0,
             current_player=1,
-            move_count=400,
+            move_count=MAX_MOVES,
         )
         
         from env.rules import winner, is_terminal

@@ -12,7 +12,7 @@ We present QZero, an AlphaZero implementation for the two-player board game Quor
 
 The AlphaZero framework (Silver et al., 2018) has proven highly effective across multiple domains. However, most implementations focus on chess, shogi, or Go—all games with well-established evaluations. Quoridor is a lesser-studied domain that presents unique challenges:
 - 140-action action space (comparable to Go's 361)
-- Deep planning horizon (up to 300 moves)
+- Deep planning horizon (up to 500 moves)
 - Complex state space (board position + wall placement)
 - Symmetric structure (exploitable for data augmentation)
 
@@ -50,15 +50,18 @@ Our work demonstrates that careful engineering of the AlphaZero architecture yie
 - 12–75: Horizontal walls at positions (r, c)
 - 76–139: Vertical walls at positions (r, c)
 
-**Observation encoding (17 × 9 × 9):**
-- Channels 0–8: Board plane (player pawn, walls, distances)
-- Channels 9–16: Current player state (walls remaining, turn counter)
+**Observation encoding (20 × 9 × 9):**
+- Channels 0–1: Current-player and opponent pawn planes
+- Channels 2–5: Horizontal and vertical wall segment planes
+- Channels 6–9: Wall counts, normalized move count, and current-player id
+- Channels 10–13: Directional blocked-passage planes
+- Channels 14–19: Wall anchors, goal rows, occupied cells, and constant bias
 - Normalized to [0, 1]
 
 ### 3.2 Network Architecture
 
 **Stem:**
-- Input: (17, 9, 9)
+- Input: (20, 9, 9)
 - Conv 3×3 → 256 filters, BN, ReLU
 
 **Main body (20 × SE-Residual blocks):**
@@ -155,6 +158,19 @@ L_reg = λ ||θ||²
 ```
 
 Where π_t is MCTS policy, z_t is game outcome (±1 or 0 for draws).
+
+**Resume-compatible anti-stall fine-tuning:**
+After observing repeated wall-heavy openings and pawn oscillation at the
+300k-step checkpoint, we added a checkpoint-compatible anti-stall mechanism.
+The network architecture and replay buffer schema are unchanged. Self-play now
+tracks canonical board keys that ignore `move_count`; repeated positions and
+long non-progress runs terminate as draws. The value target also receives a
+small path-progress shaping term based on shortest-path distance changes:
+improving the mover's path and increasing the opponent's path are rewarded,
+while repeated boards, non-progress moves, and non-progress wall placements are
+penalized. This intervention is logged in experiment manifests through
+`repetition_limit`, `stall_limit`, `progress_weight`, `repeat_penalty`,
+`non_progress_penalty`, `wall_no_progress_penalty`, and `shaping_discount`.
 
 ### 3.5 Evaluation (Arena)
 
@@ -298,4 +314,3 @@ Key settings:
 - Precision: BF16
 - MCTS: 800 sims, c_puct=1.5, virtual_loss=3
 - Self-play: 4 workers, 100 games/iter, LR augmentation enabled
-

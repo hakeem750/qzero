@@ -15,6 +15,7 @@ import time
 import numpy as np
 import torch
 
+from env.anti_stall import AntiStallConfig, AntiStallTracker
 from env.actions import action_name
 from env.quoridor_env import QuoridorEnv
 from env.rules import winner
@@ -48,6 +49,7 @@ def play_game(
     max_moves: int = MAX_MOVES,
     display: str = "off",
     game_index: int = 1,
+    anti_stall_config: AntiStallConfig | None = None,
 ) -> dict:
     """
     Play one game. Returns winner plus evaluation telemetry.
@@ -64,6 +66,12 @@ def play_game(
     root_b = mcts_b.new_root(env.state)
     policy_entropies = []
     root_values = []
+    anti_stall = AntiStallTracker(anti_stall_config or AntiStallConfig())
+    anti_stall.reset(env.state)
+    termination = "natural"
+    repeated_positions = 0
+    non_progress_moves = 0
+    progress_swing_total = 0.0
 
     def player_label(player: int) -> str:
         model_name = "candidate" if (player == 1) == a_is_p1 else "best"
@@ -90,7 +98,12 @@ def play_game(
         move_number = env.state.move_count
         confidence = float(visit_policy[action])
         q_value = float(root.q_value)
+        before_state = env.state
         env.step(action)
+        event = anti_stall.observe(before_state, env.state, cur, action)
+        repeated_positions += int(event.repeated)
+        non_progress_moves += int(event.progress_swing <= 0.0)
+        progress_swing_total += event.progress_swing
 
         if display == "moves":
             print(
@@ -107,6 +120,13 @@ def play_game(
             )
             print(env.render())
 
+        if event.repeated:
+            termination = "repetition"
+            break
+        if event.stalled:
+            termination = "stall"
+            break
+
         if action in root_a.children:
             root_a = root_a.children[action]
         else:
@@ -119,6 +139,8 @@ def play_game(
 
     natural_winner = winner(env.state)
     cutoff = natural_winner in (None, 0) and env.state.move_count >= max_moves
+    if cutoff:
+        termination = "cutoff"
     winner_id = natural_winner or 0
 
     if display != "off":
@@ -126,7 +148,7 @@ def play_game(
             result_text = "draw"
         else:
             result_text = f"{player_label(winner_id)} wins"
-        cutoff_text = " cutoff-draw" if cutoff else ""
+        cutoff_text = f" {termination}-draw" if winner_id == 0 and termination != "natural" else ""
         print(
             f"  eval game {game_index} result: {result_text} "
             f"moves={env.state.move_count}{cutoff_text}",
@@ -144,7 +166,11 @@ def play_game(
     return {
         "winner": winner_id,
         "cutoff": cutoff,
+        "termination": termination,
         "game_length": env.state.move_count,
+        "repeated_positions": repeated_positions,
+        "non_progress_moves": non_progress_moves,
+        "avg_progress_swing": float(progress_swing_total / max(1, env.state.move_count)),
         "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
         "value_calibration_mse": float(np.mean(value_errors)) if value_errors else 0.0,
     }
@@ -160,6 +186,7 @@ class Arena:
         win_thresh: float = 0.55,
         max_moves: int = MAX_MOVES,
         device: str = "cuda",
+        anti_stall_config: AntiStallConfig | None = None,
     ) -> None:
         self.num_games = num_games
         self.num_sims = num_sims
@@ -168,6 +195,7 @@ class Arena:
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.dtype = torch.bfloat16
         self.elo_tracker = EloTracker()
+        self.anti_stall_config = anti_stall_config or AntiStallConfig()
 
     def evaluate(
         self,
@@ -194,6 +222,10 @@ class Arena:
         policy_entropies = []
         value_calibration = []
         cutoffs = []
+        repetition_ends = []
+        stall_ends = []
+        non_progress_rates = []
+        progress_swings = []
         t0 = time.time()
 
         for i in range(self.num_games):
@@ -211,6 +243,7 @@ class Arena:
                 max_moves=self.max_moves,
                 display=show_display,
                 game_index=i + 1,
+                anti_stall_config=self.anti_stall_config,
             )
 
             result = game["winner"]
@@ -218,6 +251,10 @@ class Arena:
             policy_entropies.append(game["policy_entropy"])
             value_calibration.append(game["value_calibration_mse"])
             cutoffs.append(bool(game.get("cutoff", False)))
+            repetition_ends.append(game.get("termination") == "repetition")
+            stall_ends.append(game.get("termination") == "stall")
+            non_progress_rates.append(float(game["non_progress_moves"]) / max(1.0, float(game["game_length"])))
+            progress_swings.append(float(game["avg_progress_swing"]))
 
             if result == 0:
                 draws += 1
@@ -249,6 +286,10 @@ class Arena:
             "policy_entropy": float(np.mean(policy_entropies)) if policy_entropies else 0.0,
             "value_calibration_mse": float(np.mean(value_calibration)) if value_calibration else 0.0,
             "cutoff_rate": float(np.mean(cutoffs)) if cutoffs else 0.0,
+            "repetition_rate": float(np.mean(repetition_ends)) if repetition_ends else 0.0,
+            "stall_rate": float(np.mean(stall_ends)) if stall_ends else 0.0,
+            "non_progress_rate": float(np.mean(non_progress_rates)) if non_progress_rates else 0.0,
+            "avg_progress_swing": float(np.mean(progress_swings)) if progress_swings else 0.0,
             "elo": elo,
         }
 

@@ -25,6 +25,7 @@ import torch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+from env.anti_stall import AntiStallConfig
 from env.state import MAX_MOVES
 from evaluation.arena import Arena
 from network.inference_server import InferenceServer
@@ -290,6 +291,7 @@ def selfplay_worker(
     min_buffer_size: int = 2_000,
     max_moves: int = MAX_MOVES,
     resign_threshold: float | None = None,
+    anti_stall_config: AntiStallConfig | None = None,
     seed: int | None = None,
 ) -> None:
     rng = np.random.default_rng(seed)
@@ -303,6 +305,7 @@ def selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        anti_stall_config=anti_stall_config,
         rng=rng,
     )
     # Full play: still encourage diverse exploration but slightly less than warmup
@@ -315,6 +318,7 @@ def selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        anti_stall_config=anti_stall_config,
         rng=rng,
     )
 
@@ -349,6 +353,7 @@ def process_selfplay_worker(
     min_buffer_size: int = 2_000,
     max_moves: int = MAX_MOVES,
     resign_threshold: float | None = None,
+    anti_stall_config: AntiStallConfig | None = None,
     seed: int | None = None,
 ) -> None:
     """Self-play worker for the optional multiprocessing backend."""
@@ -372,6 +377,7 @@ def process_selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        anti_stall_config=anti_stall_config,
         rng=rng,
     )
     gen_full = GameGenerator(
@@ -382,6 +388,7 @@ def process_selfplay_worker(
         augment=True,
         max_moves=max_moves,
         resign_threshold=resign_threshold,
+        anti_stall_config=anti_stall_config,
         rng=rng,
     )
 
@@ -505,6 +512,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help=f"Force game length limit (default {MAX_MOVES}). Set higher for longer games with wall strategy.")
     parser.add_argument("--resign_threshold", type=float,         default=None,
                         help="Optional: resign if MCTS value drops below this threshold (e.g. -0.9). Default None disables.")
+    parser.add_argument("--repetition_limit", type=int,           default=3,
+                        help="Repeated canonical board count that ends self-play as draw. Set 0 to disable.")
+    parser.add_argument("--stall_limit",      type=int,           default=80,
+                        help="Consecutive non-progress plies that ends self-play as draw. Set 0 to disable.")
+    parser.add_argument("--progress_weight",  type=float,         default=0.02,
+                        help="Weight for path-progress shaping added to value targets.")
+    parser.add_argument("--repeat_penalty",   type=float,         default=0.03,
+                        help="Value shaping penalty for revisiting a canonical board.")
+    parser.add_argument("--non_progress_penalty", type=float,     default=0.002,
+                        help="Value shaping penalty for moves that do not improve path swing.")
+    parser.add_argument("--wall_no_progress_penalty", type=float, default=0.01,
+                        help="Extra value shaping penalty for walls that do not improve path swing.")
+    parser.add_argument("--shaping_discount", type=float,         default=0.99,
+                        help="Discount used when backing up anti-stall shaping within a game.")
     return parser
 
 
@@ -516,6 +537,15 @@ def main() -> None:
         print("✓ CUBLAS_WORKSPACE_CONFIG set to :16:8 for deterministic behavior")
     
     args = build_arg_parser().parse_args()
+    anti_stall_config = AntiStallConfig(
+        repetition_limit=args.repetition_limit,
+        stall_limit=args.stall_limit,
+        progress_weight=args.progress_weight,
+        repeat_penalty=args.repeat_penalty,
+        non_progress_penalty=args.non_progress_penalty,
+        wall_no_progress_penalty=args.wall_no_progress_penalty,
+        shaping_discount=args.shaping_discount,
+    )
     configure_checkpoint_dir(args.checkpoint_dir)
     if not args.resume:
         try:
@@ -530,6 +560,13 @@ def main() -> None:
     set_seeds(args.seed)
     device = torch.device(args.device)
     print(f"Device: {device}")
+    print(
+        "Anti-stall: "
+        f"repeat_limit={anti_stall_config.repetition_limit}, "
+        f"stall_limit={anti_stall_config.stall_limit}, "
+        f"progress_weight={anti_stall_config.progress_weight}, "
+        f"wall_no_progress_penalty={anti_stall_config.wall_no_progress_penalty}"
+    )
 
     compile_model = device.type == "cuda" and args.compile and not args.no_compile
     print(f"torch.compile: {'enabled' if compile_model else 'disabled'}")
@@ -640,6 +677,7 @@ def main() -> None:
         win_thresh=args.win_thresh,
         max_moves=args.eval_max_moves,
         device=str(device),
+        anti_stall_config=anti_stall_config,
     )
     writer = _build_summary_writer(args.log_dir)
 
@@ -668,6 +706,7 @@ def main() -> None:
                       process_sample_queue, process_buffer_size, args.num_sims,
                       stop_event, args.warmup_sims, args.min_buffer_size,
                       args.force_max_moves, args.resign_threshold,
+                      anti_stall_config,
                       args.seed + worker_id),
                 daemon=True,
             )
@@ -679,7 +718,7 @@ def main() -> None:
                 target=selfplay_worker,
                 args=(inference_fn, buffer, args.num_sims, stop_event,
                       args.warmup_sims, args.min_buffer_size, args.force_max_moves,
-                      args.resign_threshold, args.seed + worker_id),
+                      args.resign_threshold, anti_stall_config, args.seed + worker_id),
                 daemon=False,  # Non-daemon to catch exceptions
                 name=f"selfplay-{worker_id}",
             )
@@ -732,6 +771,9 @@ def main() -> None:
                 f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
                 f"len={result['avg_game_length']:.1f}  "
                 f"cutoff={result.get('cutoff_rate', 0.0):.2f}  "
+                f"rep={result.get('repetition_rate', 0.0):.2f}  "
+                f"stall={result.get('stall_rate', 0.0):.2f}  "
+                f"nonprog={result.get('non_progress_rate', 0.0):.2f}  "
                 f"H={result['policy_entropy']:.3f}  "
                 f"v_cal={result['value_calibration_mse']:.3f}  "
                 f"elo={result['elo']:.1f}  "
@@ -798,6 +840,9 @@ def main() -> None:
                     f"W/D/L={result['wins']}/{result['draws']}/{result['losses']}  "
                     f"len={result['avg_game_length']:.1f}  "
                     f"cutoff={result.get('cutoff_rate', 0.0):.2f}  "
+                    f"rep={result.get('repetition_rate', 0.0):.2f}  "
+                    f"stall={result.get('stall_rate', 0.0):.2f}  "
+                    f"nonprog={result.get('non_progress_rate', 0.0):.2f}  "
                     f"H={result['policy_entropy']:.3f}  "
                     f"v_cal={result['value_calibration_mse']:.3f}  "
                     f"elo={result['elo']:.1f}  "

@@ -4,6 +4,46 @@ Experiment log for Quoridor AlphaZero training runs.
 
 ---
 
+## E003: Resume-Compatible Anti-Stall Fine-Tuning
+
+**Date:** 2026-06-09  
+**Status:** Implemented; ready to resume from the 300k-step GPU checkpoint
+
+**Change:**
+- Added canonical repeated-position detection that ignores `move_count`.
+- Added stall detection for long runs of non-progress moves.
+- Added small path-progress value shaping without changing the network architecture or replay buffer schema.
+- Added evaluation metrics: repetition rate, stall rate, non-progress rate, and average path-progress swing.
+
+**Reason:**
+- At ~300k training steps, evaluation games showed wall-heavy openings followed by pawn oscillation.
+- Starting from scratch is unnecessary; the intervention is compatible with existing checkpoints.
+- The goal is to continue training from `checkpoints/progress_gpu` while making new self-play data penalize repeated boards and non-progress wall spam.
+- Recommended run keeps the 300k model weights but uses `--fresh_buffer` so old stalling samples do not dominate fine-tuning.
+
+**Settings to report:**
+- `repetition_limit=3`
+- `stall_limit=80`
+- `progress_weight=0.02`
+- `repeat_penalty=0.03`
+- `non_progress_penalty=0.002`
+- `wall_no_progress_penalty=0.01`
+- `shaping_discount=0.99`
+
+**Metrics to compare before/after:**
+- Cutoff rate
+- Repetition rate
+- Stall rate
+- Non-progress move rate
+- Average game length
+- Average path-progress swing
+- Win/draw/loss rate against the pre-intervention best model
+
+**Paper note:**
+- Report this as a curriculum/reward-shaping correction applied during continued training, not as a new architecture.
+
+---
+
 ## 📌 Milestone: Step 20,000 - Model Promotion! 🏆
 
 **Date:** 2026-06-08  
@@ -210,4 +250,3 @@ Use this template for future experiments:
 **Conclusion:**
 - [What did we learn]
 ```
-

@@ -29,7 +29,7 @@ quoridor_alpha_zero/
 │   ├── state.py      Immutable QuoridorState
 │   ├── rules.py      Legal moves, BFS path check, apply_action
 │   ├── actions.py    140-action encoding
-│   ├── encoding.py   (17,9,9) tensor + LR-mirror augmentation
+│   ├── encoding.py   (20,9,9) tensor + LR-mirror augmentation
 │   └── quoridor_env.py  Gym-style wrapper
 ├── network/
 │   ├── residual_block.py   ResidualBlock + SEBlock
@@ -85,6 +85,12 @@ buffer. Use `--compile` only for explicit comparison runs.
 python scripts/train.py --resume
 ```
 
+To continue an existing GPU run with anti-stall fine-tuning:
+
+```bash
+python scripts/train.py --resume --fresh_buffer --checkpoint_dir checkpoints/progress_gpu --buffer_path data/progress_gpu_e003.npz --experiment_id E003
+```
+
 ### Standalone evaluation
 
 Run candidate vs best without starting training, and watch the first game in the terminal:
@@ -135,7 +141,7 @@ docker run --gpus all quoridor-az
 ## Architecture
 
 ```
-Input (17, 9, 9)
+Input (20, 9, 9)
     ↓
 Stem Conv (3×3, 256ch)
     ↓
